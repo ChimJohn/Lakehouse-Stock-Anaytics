@@ -1,0 +1,68 @@
+name: Drift Detection
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # Daily at 6 AM UTC (2 PM SGT)
+  workflow_dispatch:        # Allow manual runs
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.9"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ vars.TF_VAR_AWS_REGION || 'ap-southeast-1' }}
+
+      - name: Terraform Init
+        run: terraform init
+        env:
+          TF_VAR_databricks_host:  ${{ secrets.DATABRICKS_HOST }}
+          TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
+          TF_VAR_s3_bucket_prefix: ${{ vars.S3_BUCKET_PREFIX }}
+          TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
+
+      - name: Terraform Plan (detect drift)
+        id: drift
+        run: |
+          terraform plan -detailed-exitcode -no-color 2>&1 | tee plan_output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        env:
+          TF_VAR_databricks_host:  ${{ secrets.DATABRICKS_HOST }}
+          TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
+          TF_VAR_s3_bucket_prefix: ${{ vars.S3_BUCKET_PREFIX }}
+          TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
+        continue-on-error: true
+
+      # Exit code 0 = no changes, 1 = error, 2 = drift detected
+      - name: Fail if drift detected
+        if: steps.drift.outputs.exit_code == '2'
+        run: |
+          echo "⚠️  DRIFT DETECTED: live infrastructure differs from Terraform state!"
+          echo "Run 'terraform apply' to reconcile, or investigate manual changes."
+          cat plan_output.txt
+          exit 1
+
+      - name: Fail on error
+        if: steps.drift.outputs.exit_code == '1'
+        run: |
+          echo "❌ Terraform plan failed with an error."
+          cat plan_output.txt
+          exit 1
+
+      - name: No drift
+        if: steps.drift.outputs.exit_code == '0'
+        run: echo "✅ No drift detected — infrastructure matches Terraform state."

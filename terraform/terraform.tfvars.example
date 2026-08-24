@@ -1,0 +1,14 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is gitignored — never commit real credentials
+
+aws_region       = "ap-southeast-1"
+s3_bucket_prefix = "nicky-lakehouse"   # must be globally unique
+
+# Set these via environment variables instead of this file:
+# export TF_VAR_databricks_host="https://<id>.cloud.databricks.com"
+# export TF_VAR_databricks_token="dapiXXXXXXXXXXXXXXXX"
+
+tickers = [
+  "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA",
+  "META", "TSLA", "BRK-B", "JPM", "V"
+]

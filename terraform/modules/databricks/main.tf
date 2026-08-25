@@ -134,7 +134,7 @@ resource "databricks_sql_endpoint" "stock_analytics" {
   name             = "stock-analytics-warehouse"
   cluster_size     = "2X-Small"  # Smallest available — free tier compatible
   max_num_clusters = 1
-  auto_stop_mins   = 10
+  auto_stop_mins   = 5
 
   tags {
     custom_tags {

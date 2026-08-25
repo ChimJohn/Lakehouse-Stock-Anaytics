@@ -54,13 +54,14 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw" {
 }
 
 # ── IAM Role for Databricks to read all three buckets ────────────────────────
+data "aws_caller_identity" "current" {}
+
 data "aws_iam_policy_document" "databricks_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
       type        = "AWS"
       identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-      aws_caller_identity = "current"
     }
   }
 }

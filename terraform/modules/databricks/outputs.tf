@@ -3,5 +3,5 @@ output "job_id" {
 }
 
 output "sql_warehouse_id" {
-  value = databricks_sql_endpoint.stock_analytics.id
+  value = data.databricks_sql_warehouse.default.id
 }

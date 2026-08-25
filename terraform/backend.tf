@@ -4,7 +4,7 @@
 
 terraform {
   backend "s3" {
-    bucket = "REPLACE_WITH_YOUR_PREFIX-tfstate"
+    bucket = "nicky-lakehouse-tfstate"
     key    = "lakehouse-stock-analytics/terraform.tfstate"
     region = "ap-southeast-1"
   }

@@ -44,33 +44,34 @@ resource "databricks_job" "daily_pipeline" {
   name = "stock-analytics-daily-pipeline"
 
   task {
-    task_key = "ingest"
+    task_key    = "ingest"
+    max_retries = 1
 
     notebook_task {
       notebook_path = databricks_notebook.ingest.path
       base_parameters = {
-        raw_bucket    = var.raw_bucket_name
-        iam_role_arn  = var.databricks_iam_role_arn
+        raw_bucket   = var.raw_bucket_name
+        iam_role_arn = var.databricks_iam_role_arn
       }
     }
 
     new_cluster {
-      spark_version           = "15.4.x-scala2.12"
-      node_type_id            = "Standard_DS3_v2"
-      num_workers             = 0
-      enable_elastic_disk     = true
-      policy_id               = databricks_cluster_policy.stock_pipeline.id
+      spark_version       = "15.4.x-scala2.12"
+      node_type_id        = "Standard_DS3_v2"
+      num_workers         = 0
+      enable_elastic_disk = true
+      policy_id           = databricks_cluster_policy.stock_pipeline.id
 
       spark_conf = {
-        "spark.master"                                  = "local[*]"
-        "spark.databricks.cluster.profile"              = "singleNode"
-        "spark.hadoop.fs.s3a.aws.credentials.provider" = "com.amazonaws.auth.InstanceProfileCredentialsProvider"
+        "spark.master"                     = "local[*]"
+        "spark.databricks.cluster.profile" = "singleNode"
       }
     }
   }
 
   task {
-    task_key = "transform"
+    task_key    = "transform"
+    max_retries = 1
     depends_on { task_key = "ingest" }
 
     notebook_task {
@@ -97,7 +98,8 @@ resource "databricks_job" "daily_pipeline" {
   }
 
   task {
-    task_key = "dashboard"
+    task_key    = "dashboard"
+    max_retries = 1
     depends_on { task_key = "transform" }
 
     notebook_task {
@@ -121,25 +123,14 @@ resource "databricks_job" "daily_pipeline" {
     }
   }
 
-  # Retry once on failure
-  max_retries = 1
-
   tags = {
     project = "lakehouse-stock-analytics"
   }
 }
 
-# ── SQL Warehouse (for Databricks SQL dashboard) ─────────────────────────────
-resource "databricks_sql_endpoint" "stock_analytics" {
-  name             = "stock-analytics-warehouse"
-  cluster_size     = "2X-Small"  # Smallest available — free tier compatible
-  max_num_clusters = 1
-  auto_stop_mins   = 5
-
-  tags {
-    custom_tags {
-      key   = "project"
-      value = "lakehouse-stock-analytics"
-    }
-  }
+# ── SQL Warehouse ─────────────────────────────────────────────────────────────
+# Use the existing default warehouse created by Databricks Free Edition
+# rather than creating a new one (Free Edition allows only one warehouse)
+data "databricks_sql_warehouse" "default" {
+  name = "Starter Warehouse"
 }

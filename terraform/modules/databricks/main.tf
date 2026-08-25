@@ -132,5 +132,5 @@ resource "databricks_job" "daily_pipeline" {
 # Use the existing default warehouse created by Databricks Free Edition
 # rather than creating a new one (Free Edition allows only one warehouse)
 data "databricks_sql_warehouse" "default" {
-  name = "Starter Warehouse"
+  name = "Serverless Starter Warehouse"
 }

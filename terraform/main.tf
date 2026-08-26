@@ -37,7 +37,6 @@ module "lambda" {
   raw_bucket_arn    = module.s3.raw_bucket_arn
   tickers           = var.tickers
   aws_region        = var.aws_region
-  tfstate_bucket    = "${var.s3_bucket_prefix}-tfstate"
 }
 
 # ── EventBridge daily schedule ───────────────────────────────────────────────

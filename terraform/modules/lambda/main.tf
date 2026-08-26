@@ -51,20 +51,18 @@ resource "aws_lambda_function" "stock_ingest" {
   timeout       = 60
   memory_size   = 256
 
-  # Points to a placeholder zip — real code deployed via:
-  # aws lambda update-function-code --s3-bucket <tfstate-bucket> --s3-key lambda_package.zip
-  s3_bucket = var.tfstate_bucket
-  s3_key    = "lambda_package.zip"
+  filename         = "${path.module}/../../../ingestion/placeholder.zip"
+  source_code_hash = filebase64sha256("${path.module}/../../../ingestion/placeholder.zip")
+
+  lifecycle {
+    ignore_changes = [filename, source_code_hash]
+  }
 
   environment {
     variables = {
       RAW_BUCKET = var.raw_bucket_name
       TICKERS    = join(",", var.tickers)
     }
-  }
-
-  lifecycle {
-    ignore_changes = [s3_key, s3_bucket, source_code_hash]
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda]

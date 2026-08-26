@@ -17,8 +17,3 @@ variable "tickers" {
 variable "aws_region" {
   type = string
 }
-
-variable "tfstate_bucket" {
-  type        = string
-  description = "S3 bucket where lambda_package.zip is stored"
-}

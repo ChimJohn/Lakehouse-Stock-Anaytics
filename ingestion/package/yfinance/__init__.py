@@ -21,21 +21,16 @@
 
 from . import version
 from .search import Search
-from .lookup import Lookup
 from .ticker import Ticker
-from .calendars import Calendars
 from .tickers import Tickers
 from .multi import download
-from .live import WebSocket, AsyncWebSocket
 from .utils import enable_debug_mode
 from .cache import set_tz_cache_location
 from .domain.sector import Sector
 from .domain.industry import Industry
-from .domain.market import Market, MarketRegion
-from .config import YfConfig as config
-from .data import Auth
+from .domain.market import Market
 
-from .screener.query import EquityQuery, FundQuery, ETFQuery
+from .screener.query import EquityQuery, FundQuery
 from .screener.screener import screen, PREDEFINED_SCREENER_QUERIES
 
 __version__ = version.version
@@ -44,18 +39,6 @@ __author__ = "Ran Aroussi"
 import warnings
 warnings.filterwarnings('default', category=DeprecationWarning, module='^yfinance')
 
-__all__ = ['download', 'Market', 'MarketRegion', 'Search', 'Lookup', 'Ticker', 'Tickers', 'enable_debug_mode', 'set_tz_cache_location',
-           'Sector', 'Industry', 'WebSocket', 'AsyncWebSocket', 'Calendars', 'Auth']
+__all__ = ['download', 'Market', 'Search', 'Ticker', 'Tickers', 'enable_debug_mode', 'set_tz_cache_location', 'Sector', 'Industry']
 # screener stuff:
-__all__ += ['EquityQuery', 'FundQuery', 'ETFQuery', 'screen', 'PREDEFINED_SCREENER_QUERIES']
-
-# Config stuff:
-_NOTSET=object()
-def set_config(proxy=_NOTSET, retries=_NOTSET):
-    if proxy is not _NOTSET:
-        warnings.warn("Set proxy via new config control: yf.config.network.proxy = proxy", DeprecationWarning)
-        config.network.proxy = proxy
-    if retries is not _NOTSET:
-        warnings.warn("Set retries via new config control: yf.config.network.retries = retries", DeprecationWarning)
-        config.network.retries = retries
-__all__ += ['config', 'set_config']
+__all__ += ['EquityQuery', 'FundQuery', 'screen', 'PREDEFINED_SCREENER_QUERIES']

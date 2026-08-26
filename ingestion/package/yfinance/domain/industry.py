@@ -1,30 +1,24 @@
 from __future__ import print_function
-
-import pandas as _pd
 from typing import Dict, Optional
 
-from .. import utils
-from ..config import YfConfig
-from ..data import YfData
+import pandas as _pd
 
 from .domain import Domain, _QUERY_URL_
+from .. import utils
 
 class Industry(Domain):
     """
     Represents an industry within a sector.
     """
 
-    def __init__(self, key, session=None, region: str = "US"):
+    def __init__(self, key, session=None, proxy=None):
         """
         Args:
             key (str): The key identifier for the industry.
             session (optional): The session to use for requests.
-            region (str): Yahoo region (ISO 3166-1 alpha-2 country code, e.g.
-                "US", "GB", "FR", "DE", "JP"). Scopes top performing/growth
-                company listings. Defaults to "US".
+            proxy (optional): The proxy to use for requests.
         """
-        YfData(session=session)
-        super(Industry, self).__init__(key, session, region)
+        super(Industry, self).__init__(key, session, proxy)
         self._query_url = f'{_QUERY_URL_}/industries/{self._key}'
 
         self._sector_key = None
@@ -95,17 +89,17 @@ class Industry(Domain):
         Returns:
             Optional[pd.DataFrame]: DataFrame containing parsed top performing companies data.
         """
-        companies_column = ['symbol','name','ytd return','last price','target price']
-        companies_values = [(c.get('symbol', None),
+        compnaies_column = ['symbol','name','ytd return',' last price','target price']
+        compnaies_values = [(c.get('symbol', None),
                              c.get('name', None),
                              c.get('ytdReturn',{}).get('raw', None),
                              c.get('lastPrice',{}).get('raw', None),
                              c.get('targetPrice',{}).get('raw', None),) for c in top_performing_companies]
         
-        if not companies_values: 
+        if not compnaies_values: 
             return None
 
-        return _pd.DataFrame(companies_values, columns = companies_column).set_index('symbol')
+        return _pd.DataFrame(compnaies_values, columns = compnaies_column).set_index('symbol')
     
     def _parse_top_growth_companies(self, top_growth_companies: Dict) -> Optional[_pd.DataFrame]:
         """
@@ -117,16 +111,16 @@ class Industry(Domain):
         Returns:
             Optional[pd.DataFrame]: DataFrame containing parsed top growth companies data.
         """
-        companies_column = ['symbol','name','ytd return','growth estimate']
-        companies_values = [(c.get('symbol', None),
+        compnaies_column = ['symbol','name','ytd return',' growth estimate']
+        compnaies_values = [(c.get('symbol', None),
                              c.get('name', None),
                              c.get('ytdReturn',{}).get('raw', None),
                              c.get('growthEstimate',{}).get('raw', None),) for c in top_growth_companies]
         
-        if not companies_values: 
+        if not compnaies_values: 
             return None
 
-        return _pd.DataFrame(companies_values, columns = companies_column).set_index('symbol')
+        return _pd.DataFrame(compnaies_values, columns = compnaies_column).set_index('symbol')
 
     def _fetch_and_parse(self) -> None:
         """
@@ -135,7 +129,7 @@ class Industry(Domain):
         result = None
         
         try:
-            result = self._fetch(self._query_url)
+            result = self._fetch(self._query_url, self.proxy)
             data = result['data']
             self._parse_and_assign_common(data)
 
@@ -146,8 +140,6 @@ class Industry(Domain):
 
             return result
         except Exception as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
             logger = utils.get_yf_logger()
             logger.error(f"Failed to get industry data for '{self._key}' reason: {e}")
             logger.debug("Got response: ")

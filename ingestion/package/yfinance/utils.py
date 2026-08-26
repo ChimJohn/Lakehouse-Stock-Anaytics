@@ -27,49 +27,22 @@ import re
 import re as _re
 import sys as _sys
 import threading
-from functools import wraps
+from functools import lru_cache, wraps
 from inspect import getmembers
 from types import FunctionType
 from typing import List, Optional
-import warnings
 
 import numpy as _np
 import pandas as _pd
-from pandas.api.types import is_float_dtype
 import pytz as _tz
+import requests as _requests
 from dateutil.relativedelta import relativedelta
 from pytz import UnknownTimeZoneError
 
 from yfinance import const
-from yfinance.exceptions import YFException
-from yfinance.config import YfConfig
 
-# Use the third-party ``frozendict`` package if installed; otherwise fall
-# back to a small pure-Python equivalent (PEP 814).
-try:
-    from frozendict import frozendict  # type: ignore[import-not-found]
-except ImportError:
-    class frozendict(dict):  # type: ignore[no-redef]
-        """Hashable, read-only ``dict`` used as an ``lru_cache`` key."""
-        __slots__ = ()
-
-        def __hash__(self):  # type: ignore[override]
-            return hash(frozenset(self.items()))
-
-        def __setitem__(self, *args, **kwargs):
-            raise TypeError(f"'{type(self).__name__}' object doesn't support item assignment")
-
-        def __delitem__(self, *args, **kwargs):
-            raise TypeError(f"'{type(self).__name__}' object doesn't support item deletion")
-
-        def _readonly(self, *args, **kwargs):
-            raise AttributeError(f"'{type(self).__name__}' object is read-only")
-
-        pop = _readonly  # type: ignore[assignment]
-        popitem = _readonly  # type: ignore[assignment]
-        clear = _readonly  # type: ignore[assignment]
-        update = _readonly  # type: ignore[assignment]
-        setdefault = _readonly  # type: ignore[assignment]
+user_agent_headers = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'}
 
 
 # From https://stackoverflow.com/a/59128615
@@ -80,6 +53,13 @@ def attributes(obj):
     return {
         name: getattr(obj, name) for name in dir(obj)
         if name[0] != '_' and name not in disallowed_names and hasattr(obj, name)}
+
+
+@lru_cache(maxsize=20)
+def print_once(msg):
+    # 'warnings' module suppression of repeat messages does not work.
+    # This function replicates correct behaviour
+    print(msg)
 
 
 # Logging
@@ -178,12 +158,6 @@ class YFLogFormatter(logging.Filter):
 def get_yf_logger():
     global yf_logger
     global yf_log_indented
-
-    if yf_log_indented and not YfConfig.debug.logging:
-        _disable_debug_mode()
-    elif YfConfig.debug.logging and not yf_log_indented:
-        _enable_debug_mode()
-
     if yf_log_indented:
         yf_logger = get_indented_logger('yfinance')
     elif yf_logger is None:
@@ -193,10 +167,6 @@ def get_yf_logger():
 
 
 def enable_debug_mode():
-    warnings.warn("enable_debug_mode() is replaced by: yf.config.debug.logging = True (or False to disable)", DeprecationWarning)
-    _enable_debug_mode()
-
-def _enable_debug_mode():
     global yf_logger
     global yf_log_indented
     if not yf_log_indented:
@@ -212,28 +182,19 @@ def _enable_debug_mode():
         yf_log_indented = True
 
 
-def _disable_debug_mode():
-    global yf_logger
-    global yf_log_indented
-    if yf_log_indented:
-        yf_logger = logging.getLogger('yfinance')
-        yf_logger.setLevel(logging.NOTSET)
-        yf_logger = None
-        yf_log_indented = False
-
-
 def is_isin(string):
     return bool(_re.match("^([A-Z]{2})([A-Z0-9]{9})([0-9])$", string))
 
 
-def get_all_by_isin(isin):
+def get_all_by_isin(isin, proxy=None, session=None):
     if not (is_isin(isin)):
         raise ValueError("Invalid ISIN number")
 
     # Deferred this to prevent circular imports
     from .search import Search
 
-    search = Search(query=isin, max_results=1)
+    session = session or _requests
+    search = Search(query=isin, max_results=1, session=session, proxy=proxy)
 
     # Extract the first quote and news
     ticker = search.quotes[0] if search.quotes else {}
@@ -251,18 +212,18 @@ def get_all_by_isin(isin):
     }
 
 
-def get_ticker_by_isin(isin):
-    data = get_all_by_isin(isin)
+def get_ticker_by_isin(isin, proxy=None, session=None):
+    data = get_all_by_isin(isin, proxy, session)
     return data.get('ticker', {}).get('symbol', '')
 
 
-def get_info_by_isin(isin):
-    data = get_all_by_isin(isin)
+def get_info_by_isin(isin, proxy=None, session=None):
+    data = get_all_by_isin(isin, proxy, session)
     return data.get('ticker', {})
 
 
-def get_news_by_isin(isin):
-    data = get_all_by_isin(isin)
+def get_news_by_isin(isin, proxy=None, session=None):
+    data = get_all_by_isin(isin, proxy, session)
     return data.get('news', {})
 
 
@@ -451,23 +412,20 @@ def snake_case_2_camelCase(s):
     return sc
 
 
-def _parse_user_dt(dt, exchange_tz=_tz.utc):
+def _parse_user_dt(dt, exchange_tz):
     if isinstance(dt, int):
-        dt = _pd.Timestamp(dt, unit="s", tz=exchange_tz)
+        # Should already be epoch, test with conversion:
+        _datetime.datetime.fromtimestamp(dt)
     else:
         # Convert str/date -> datetime, set tzinfo=exchange, get timestamp:
         if isinstance(dt, str):
             dt = _datetime.datetime.strptime(str(dt), '%Y-%m-%d')
         if isinstance(dt, _datetime.date) and not isinstance(dt, _datetime.datetime):
             dt = _datetime.datetime.combine(dt, _datetime.time(0))
-        if isinstance(dt, _datetime.datetime):
-            if dt.tzinfo is None:
-                # Assume user is referring to exchange's timezone
-                dt = _pd.Timestamp(dt).tz_localize(exchange_tz)
-            else:
-                dt = _pd.Timestamp(dt).tz_convert(exchange_tz)
-        else: # if we reached here, then it hasn't been any known type
-            raise ValueError(f"Unable to parse input dt {dt} of type {type(dt)}")
+        if isinstance(dt, _datetime.datetime) and dt.tzinfo is None:
+            # Assume user is referring to exchange's timezone
+            dt = _tz.timezone(exchange_tz).localize(dt)
+        dt = int(dt.timestamp())
     return dt
 
 
@@ -480,15 +438,6 @@ def _interval_to_timedelta(interval):
         return relativedelta(months=int(interval[:-2]))
     elif interval[-1] == "y":
         return relativedelta(years=int(interval[:-1]))
-    elif interval[-1] == "m":
-        # Minute intervals e.g. "1m", "30m", "90m". Pass the value and an
-        # explicit unit rather than a keyword like minutes=, because on
-        # pandas 2.x + numpy>=2.5 even the keyword form emits the
-        # "'generic' unit for NumPy timedelta is deprecated" warning; only
-        # the (value, unit=...) form is silent.
-        return _pd.Timedelta(int(interval[:-1]), unit="m")
-    elif interval[-1] == "h":
-        return _pd.Timedelta(int(interval[:-1]), unit="h")
     else:
         return _pd.Timedelta(interval)
 
@@ -564,12 +513,10 @@ def parse_quotes(data):
                             "Close": closes,
                             "Adj Close": adjclose,
                             "Volume": volumes})
+
     quotes.index = _pd.to_datetime(timestamps, unit="s")
     quotes.sort_index(inplace=True)
-    for c in ['Open', 'High', 'Low', 'Close', 'Adj Close']:
-        if not is_float_dtype(quotes[c].dtype):
-            # Only seen when Adj Close contains Infinity.
-            quotes[c] = quotes[c].astype('float')
+
     return quotes
 
 
@@ -579,18 +526,15 @@ def parse_actions(data):
     splits = None
 
     if "events" in data:
-        if "dividends" in data["events"] and len(data["events"]['dividends']) > 0:
+        if "dividends" in data["events"]:
             dividends = _pd.DataFrame(
                 data=list(data["events"]["dividends"].values()))
             dividends.set_index("date", inplace=True)
             dividends.index = _pd.to_datetime(dividends.index, unit="s")
             dividends.sort_index(inplace=True)
-            if 'currency' in dividends.columns and (dividends['currency'] == '').all():
-                # Currency column useless, drop it.
-                dividends = dividends.drop('currency', axis=1)
-            dividends = dividends.rename(columns={'amount': 'Dividends'})
+            dividends.columns = ["Dividends"]
 
-        if "capitalGains" in data["events"] and len(data["events"]['capitalGains']) > 0:
+        if "capitalGains" in data["events"]:
             capital_gains = _pd.DataFrame(
                 data=list(data["events"]["capitalGains"].values()))
             capital_gains.set_index("date", inplace=True)
@@ -598,7 +542,7 @@ def parse_actions(data):
             capital_gains.sort_index(inplace=True)
             capital_gains.columns = ["Capital Gains"]
 
-        if "splits" in data["events"] and len(data["events"]['splits']) > 0:
+        if "splits" in data["events"]:
             splits = _pd.DataFrame(
                 data=list(data["events"]["splits"].values()))
             splits.set_index("date", inplace=True)
@@ -641,8 +585,7 @@ def fix_Yahoo_returning_prepost_unrequested(quotes, interval, tradingPeriods):
     quotes.index = idx
     # "end" = end of regular trading hours (including any auction)
     f_drop = quotes.index >= quotes["end"]
-    td = _interval_to_timedelta(interval)
-    f_drop = f_drop | (quotes.index + td <= quotes["start"])
+    f_drop = f_drop | (quotes.index < quotes["start"])
     if f_drop.any():
         # When printing report, ignore rows that were already NaNs:
         # f_na = quotes[["Open","Close"]].isna().all(axis=1)
@@ -656,47 +599,15 @@ def fix_Yahoo_returning_prepost_unrequested(quotes, interval, tradingPeriods):
     return quotes
 
 
-def _dts_in_same_interval(dt1, dt2, interval):
-    # Check if second date dt2 in interval starting at dt1
-
-    if interval == '1d':
-        last_rows_same_interval = dt1.date() == dt2.date()
-    elif interval == "1wk":
-        last_rows_same_interval = (dt2 - dt1).days < 7
-    elif interval == "1mo":
-        last_rows_same_interval = dt1.month == dt2.month and dt1.year == dt2.year
-    elif interval == "3mo":
-        shift = (dt1.month % 3) - 1
-        q1 = (dt1.month - shift - 1) // 3 + 1
-        q2 = (dt2.month - shift - 1) // 3 + 1
-        year_diff = dt2.year - dt1.year
-        quarter_diff = q2 - q1 + 4*year_diff
-        last_rows_same_interval = quarter_diff == 0
-    elif interval[-1] == "d":
-        # Multi-day intervals e.g. "5d". _interval_to_timedelta() returns a
-        # relativedelta for day intervals, which cannot be compared with the
-        # Timedelta (dt2 - dt1) and raises TypeError, so build a Timedelta
-        # directly. unit="D" rather than days=... keeps the numpy>=2.5
-        # "generic unit" deprecation warning silent.
-        last_rows_same_interval = (dt2 - dt1) < _pd.Timedelta(int(interval[:-1]), unit="D")
-    else:
-        last_rows_same_interval = (dt2 - dt1) < _interval_to_timedelta(interval)
-    return last_rows_same_interval
-
-
-def fix_Yahoo_returning_live_separate(quotes, interval, tz_exchange, prepost, repair=False, currency=None):
+def fix_Yahoo_returning_live_separate(quotes, interval, tz_exchange, repair=False, currency=None):
     # Yahoo bug fix. If market is open today then Yahoo normally returns
     # todays data as a separate row from rest-of week/month interval in above row.
     # Seems to depend on what exchange e.g. crypto OK.
     # Fix = merge them together
-
-    if interval[-1] not in ['m', 'h']:
-        prepost = False
-
-    dropped_row = None
-    if len(quotes) > 1:
-        dt1 = quotes.index[-1]
-        dt2 = quotes.index[-2]
+    n = quotes.shape[0]
+    if n > 1:
+        dt1 = quotes.index[n - 1]
+        dt2 = quotes.index[n - 2]
         if quotes.index.tz is None:
             dt1 = dt1.tz_localize("UTC")
             dt2 = dt2.tz_localize("UTC")
@@ -707,23 +618,25 @@ def fix_Yahoo_returning_live_separate(quotes, interval, tz_exchange, prepost, re
             # - exception is volume, *slightly* greater on final row (and matches website)
             if dt1.date() == dt2.date():
                 # Last two rows are on same day. Drop second-to-last row
-                dropped_row = quotes.iloc[-2]
                 quotes = _pd.concat([quotes.iloc[:-2], quotes.iloc[-1:]])
         else:
-            if _dts_in_same_interval(dt2, dt1, interval):
+            if interval == "1wk":
+                last_rows_same_interval = dt1.year == dt2.year and dt1.week == dt2.week
+            elif interval == "1mo":
+                last_rows_same_interval = dt1.month == dt2.month
+            elif interval == "3mo":
+                last_rows_same_interval = dt1.year == dt2.year and dt1.quarter == dt2.quarter
+            else:
+                last_rows_same_interval = (dt1 - dt2) < _pd.Timedelta(interval)
+
+            if last_rows_same_interval:
                 # Last two rows are within same interval
-                idx1 = quotes.index[-1]
-                idx2 = quotes.index[-2]
+                idx1 = quotes.index[n - 1]
+                idx2 = quotes.index[n - 2]
                 if idx1 == idx2:
                     # Yahoo returning last interval duplicated, which means
                     # Yahoo is not returning live data (phew!)
-                    return quotes, None
-
-                if prepost:
-                    # Possibly dt1 is just start of post-market
-                    if dt1.second == 0:
-                        # assume post-market interval
-                        return quotes, None
+                    return quotes
 
                 ss = quotes['Stock Splits'].iloc[-2:].replace(0,1).prod()
                 if repair:
@@ -746,37 +659,42 @@ def fix_Yahoo_returning_live_separate(quotes, interval, tz_exchange, prepost, re
                             for c in const._PRICE_COLNAMES_:
                                 quotes.loc[idx2, c] *= 0.01
 
+                # quotes.loc[idx2, 'Stock Splits'] = 2  # wtf? why doing this?
+
                 if _np.isnan(quotes.loc[idx2, "Open"]):
-                    quotes.loc[idx2, "Open"] = quotes["Open"].iloc[-1]
+                    quotes.loc[idx2, "Open"] = quotes["Open"].iloc[n - 1]
                 # Note: nanmax() & nanmin() ignores NaNs, but still need to check not all are NaN to avoid warnings
-                if not _np.isnan(quotes["High"].iloc[-1]):
-                    quotes.loc[idx2, "High"] = _np.nanmax([quotes["High"].iloc[-1], quotes["High"].iloc[-2]])
+                if not _np.isnan(quotes["High"].iloc[n - 1]):
+                    quotes.loc[idx2, "High"] = _np.nanmax([quotes["High"].iloc[n - 1], quotes["High"].iloc[n - 2]])
                     if "Adj High" in quotes.columns:
-                        quotes.loc[idx2, "Adj High"] = _np.nanmax([quotes["Adj High"].iloc[-1], quotes["Adj High"].iloc[-2]])
+                        quotes.loc[idx2, "Adj High"] = _np.nanmax([quotes["Adj High"].iloc[n - 1], quotes["Adj High"].iloc[n - 2]])
 
-                if not _np.isnan(quotes["Low"].iloc[-1]):
-                    quotes.loc[idx2, "Low"] = _np.nanmin([quotes["Low"].iloc[-1], quotes["Low"].iloc[-2]])
+                if not _np.isnan(quotes["Low"].iloc[n - 1]):
+                    quotes.loc[idx2, "Low"] = _np.nanmin([quotes["Low"].iloc[n - 1], quotes["Low"].iloc[n - 2]])
                     if "Adj Low" in quotes.columns:
-                        quotes.loc[idx2, "Adj Low"] = _np.nanmin([quotes["Adj Low"].iloc[-1], quotes["Adj Low"].iloc[-2]])
+                        quotes.loc[idx2, "Adj Low"] = _np.nanmin([quotes["Adj Low"].iloc[n - 1], quotes["Adj Low"].iloc[n - 2]])
 
-                quotes.loc[idx2, "Close"] = quotes["Close"].iloc[-1]
+                quotes.loc[idx2, "Close"] = quotes["Close"].iloc[n - 1]
                 if "Adj Close" in quotes.columns:
-                    quotes.loc[idx2, "Adj Close"] = quotes["Adj Close"].iloc[-1]
-                quotes.loc[idx2, "Volume"] += quotes["Volume"].iloc[-1]
-                quotes.loc[idx2, "Dividends"] += quotes["Dividends"].iloc[-1]
+                    quotes.loc[idx2, "Adj Close"] = quotes["Adj Close"].iloc[n - 1]
+                quotes.loc[idx2, "Volume"] += quotes["Volume"].iloc[n - 1]
+                quotes.loc[idx2, "Dividends"] += quotes["Dividends"].iloc[n - 1]
                 if ss != 1.0:
                     quotes.loc[idx2, "Stock Splits"] = ss
-                dropped_row = quotes.iloc[-1]
-                quotes = quotes.drop(quotes.index[-1])
+                quotes = quotes.drop(quotes.index[n - 1])
 
-    return quotes, dropped_row
+    return quotes
 
 
 def safe_merge_dfs(df_main, df_sub, interval):
+    if df_sub.empty:
+        raise Exception("No data to merge")
     if df_main.empty:
         return df_main
 
     data_cols = [c for c in df_sub.columns if c not in df_main]
+    if len(data_cols) > 1:
+        raise Exception("Expected 1 data col")
     data_col = data_cols[0]
 
     df_main = df_main.sort_index()
@@ -817,13 +735,6 @@ def safe_merge_dfs(df_main, df_sub, interval):
             if df_sub.empty:
                 df_main['Dividends'] = 0.0
                 return df_main
-
-            # df_sub changed so recalc indices:
-            df_main['_date'] = df_main.index.date
-            df_sub['_date'] = df_sub.index.date
-            indices = _np.searchsorted(_np.append(df_main['_date'], [df_main['_date'].iloc[-1]+td]), df_sub['_date'], side='left')
-            df_main = df_main.drop('_date', axis=1)
-            df_sub = df_sub.drop('_date', axis=1)
         else:
             empty_row_data = {**{c:[_np.nan] for c in const._PRICE_COLNAMES_}, 'Volume':[0]}
             if interval == '1d':
@@ -860,7 +771,7 @@ def safe_merge_dfs(df_main, df_sub, interval):
     f_outOfRange = indices == -1
     if f_outOfRange.any():
         if intraday or interval in ['1d', '1wk']:
-            raise YFException(f"The following '{data_col}' events are out-of-range, did not expect with interval {interval}: {df_sub.index[f_outOfRange]}")
+            raise Exception(f"The following '{data_col}' events are out-of-range, did not expect with interval {interval}: {df_sub.index[f_outOfRange]}")
         get_yf_logger().debug(f'Discarding these {data_col} events:' + '\n' + str(df_sub[f_outOfRange]))
         df_sub = df_sub[~f_outOfRange].copy()
         indices = indices[~f_outOfRange]
@@ -882,7 +793,7 @@ def safe_merge_dfs(df_main, df_sub, interval):
             df = df.groupby("_NewIndex").prod()
             df.index.name = None
         else:
-            raise YFException(f"New index contains duplicates but unsure how to aggregate for '{data_col_name}'")
+            raise Exception(f"New index contains duplicates but unsure how to aggregate for '{data_col_name}'")
         if "_NewIndex" in df.columns:
             df = df.drop("_NewIndex", axis=1)
         return df
@@ -894,7 +805,7 @@ def safe_merge_dfs(df_main, df_sub, interval):
     f_na = df[data_col].isna()
     data_lost = sum(~f_na) < df_sub.shape[0]
     if data_lost:
-        raise YFException('Data was lost in merge, investigate')
+        raise Exception('Data was lost in merge, investigate')
 
     return df
 
@@ -920,29 +831,28 @@ def is_valid_timezone(tz: str) -> bool:
     return True
 
 
-def format_history_metadata(md):
+def format_history_metadata(md, tradingPeriodsOnly=True):
     if not isinstance(md, dict):
         return md
     if len(md) == 0:
         return md
-    elif 'exchangeTimezoneName' not in md.keys():
-        return md
 
     tz = md["exchangeTimezoneName"]
 
-    for k in ["firstTradeDate", "regularMarketTime"]:
-        if k in md and md[k] is not None:
-            if isinstance(md[k], int):
+    if not tradingPeriodsOnly:
+        for k in ["firstTradeDate", "regularMarketTime"]:
+            if k in md and md[k] is not None:
+                if isinstance(md[k], int):
                     md[k] = _pd.to_datetime(md[k], unit='s', utc=True).tz_convert(tz)
 
-    if "currentTradingPeriod" in md:
-        for m in ["regular", "pre", "post"]:
-            if m in md["currentTradingPeriod"] and isinstance(md["currentTradingPeriod"][m]["start"], int):
-                for t in ["start", "end"]:
-                    md["currentTradingPeriod"][m][t] = \
+        if "currentTradingPeriod" in md:
+            for m in ["regular", "pre", "post"]:
+                if m in md["currentTradingPeriod"] and isinstance(md["currentTradingPeriod"][m]["start"], int):
+                    for t in ["start", "end"]:
+                        md["currentTradingPeriod"][m][t] = \
                             _pd.to_datetime(md["currentTradingPeriod"][m][t], unit='s', utc=True).tz_convert(tz)
-                del md["currentTradingPeriod"][m]["gmtoffset"]
-                del md["currentTradingPeriod"][m]["timezone"]
+                    del md["currentTradingPeriod"][m]["gmtoffset"]
+                    del md["currentTradingPeriod"][m]["timezone"]
 
     if "tradingPeriods" in md:
         tps = md["tradingPeriods"]

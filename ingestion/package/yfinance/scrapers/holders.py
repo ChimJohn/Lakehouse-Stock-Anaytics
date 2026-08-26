@@ -1,20 +1,21 @@
-from yfinance._http import HTTPError
 import pandas as pd
+import requests
 
 from yfinance import utils
-from yfinance.config import YfConfig
-from yfinance.const import _BASE_URL_
 from yfinance.data import YfData
+from yfinance.const import _BASE_URL_
 from yfinance.exceptions import YFDataException
 
 _QUOTE_SUMMARY_URL_ = f"{_BASE_URL_}/v10/finance/quoteSummary"
 
+
 class Holders:
     _SCRAPE_URL_ = 'https://finance.yahoo.com/quote'
 
-    def __init__(self, data: YfData, symbol: str):
+    def __init__(self, data: YfData, symbol: str, proxy=None):
         self._data = data
         self._symbol = symbol
+        self.proxy = proxy
 
         self._major = None
         self._major_direct_holders = None
@@ -61,20 +62,18 @@ class Holders:
             self._fetch_and_parse()
         return self._insider_roster
 
-    def _fetch(self):
+    def _fetch(self, proxy):
         modules = ','.join(
             ["institutionOwnership", "fundOwnership", "majorDirectHolders", "majorHoldersBreakdown", "insiderTransactions", "insiderHolders", "netSharePurchaseActivity"])
         params_dict = {"modules": modules, "corsDomain": "finance.yahoo.com", "formatted": "false"}
-        result = self._data.get_raw_json(f"{_QUOTE_SUMMARY_URL_}/{self._symbol}", params=params_dict)
+        result = self._data.get_raw_json(f"{_QUOTE_SUMMARY_URL_}/{self._symbol}", user_agent_headers=self._data.user_agent_headers, params=params_dict, proxy=proxy)
         return result
 
     def _fetch_and_parse(self):
         try:
-            result = self._fetch()
-        except HTTPError as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            utils.get_yf_logger().error(str(e) + e.response.text)
+            result = self._fetch(self.proxy)
+        except requests.exceptions.HTTPError as e:
+            utils.get_yf_logger().error(str(e))
 
             self._major = pd.DataFrame()
             self._major_direct_holders = pd.DataFrame()
@@ -97,8 +96,6 @@ class Holders:
             self._parse_insider_holders(data.get("insiderHolders", {}))
             self._parse_net_share_purchase_activity(data.get("netSharePurchaseActivity", {}))
         except (KeyError, IndexError):
-            if not YfConfig.debug.hide_exceptions:
-                raise
             raise YFDataException("Failed to parse holders json data.")
 
     @staticmethod

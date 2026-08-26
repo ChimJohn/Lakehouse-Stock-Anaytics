@@ -1,14 +1,13 @@
-from yfinance._http import HTTPError
 import datetime
 import json
-import numbers
+
 import numpy as _np
 import pandas as pd
+import requests
 
 from yfinance import utils
-from yfinance.config import YfConfig
-from yfinance.const import quote_summary_valid_modules, _BASE_URL_, _QUERY1_URL_
 from yfinance.data import YfData
+from yfinance.const import quote_summary_valid_modules, _BASE_URL_, _QUERY1_URL_
 from yfinance.exceptions import YFDataException, YFException
 
 info_retired_keys_price = {"currentPrice", "dayHigh", "dayLow", "open", "previousClose", "volume", "volume24Hr"}
@@ -18,25 +17,6 @@ info_retired_keys_price.update({"averageDailyVolume10Day", "averageVolume10days"
 info_retired_keys_exchange = {"currency", "exchange", "exchangeTimezoneName", "exchangeTimezoneShortName", "quoteType"}
 info_retired_keys_marketCap = {"marketCap"}
 info_retired_keys_symbol = {"symbol"}
-
-# Valuation-measure timeseries keys (fundamentals-timeseries API) -> display labels,
-# matching the rows historically shown on the Yahoo key-statistics page.
-_VALUATION_MEASURE_LABELS = {
-    "MarketCap": "Market Cap",
-    "EnterpriseValue": "Enterprise Value",
-    "PeRatio": "Trailing P/E",
-    "ForwardPeRatio": "Forward P/E",
-    "PegRatio": "PEG Ratio (5yr expected)",
-    "PsRatio": "Price/Sales",
-    "PbRatio": "Price/Book",
-    "EnterprisesValueRevenueRatio": "Enterprise Value/Revenue",
-    "EnterprisesValueEBITDARatio": "Enterprise Value/EBITDA",
-}
-# Public freq -> fundamentals-timeseries type prefix for the period columns.
-_VALUATION_FREQ_PREFIX = {"quarterly": "quarterly", "monthly": "monthly",
-                          "yearly": "annual", "trailing": "trailing"}
-
-
 info_retired_keys = info_retired_keys_price | info_retired_keys_exchange | info_retired_keys_marketCap | info_retired_keys_symbol
 
 
@@ -46,8 +26,9 @@ _QUOTE_SUMMARY_URL_ = f"{_BASE_URL_}/v10/finance/quoteSummary"
 class FastInfo:
     # Contain small subset of info[] items that can be fetched faster elsewhere.
     # Imitates a dict.
-    def __init__(self, tickerBaseObject):
+    def __init__(self, tickerBaseObject, proxy=None):
         self._tkr = tickerBaseObject
+        self.proxy = proxy
 
         self._prices_1y = None
         self._prices_1wk_1h_prepost = None
@@ -123,7 +104,7 @@ class FastInfo:
 
     def __getitem__(self, k):
         if not isinstance(k, str):
-            raise KeyError(f"key must be a string not '{type(k)}'")
+            raise KeyError("key must be a string")
         if k not in self._keys:
             raise KeyError(f"'{k}' not valid key. Examine 'FastInfo.keys()'")
         if k in self._cc_to_sc_key:
@@ -147,8 +128,8 @@ class FastInfo:
 
     def _get_1y_prices(self, fullDaysOnly=False):
         if self._prices_1y is None:
-            self._prices_1y = self._tkr.history(period="1y", auto_adjust=False, keepna=True)
-            self._md = self._tkr.get_history_metadata()
+            self._prices_1y = self._tkr.history(period="1y", auto_adjust=False, keepna=True, proxy=self.proxy)
+            self._md = self._tkr.get_history_metadata(proxy=self.proxy)
             try:
                 ctp = self._md["currentTradingPeriod"]
                 self._today_open = pd.to_datetime(ctp["regular"]["start"], unit='s', utc=True).tz_convert(self.timezone)
@@ -163,7 +144,7 @@ class FastInfo:
         if self._prices_1y.empty:
             return self._prices_1y
 
-        dnow = pd.Timestamp.now('UTC').tz_convert(self.timezone).date()
+        dnow = pd.Timestamp.utcnow().tz_convert(self.timezone).date()
         d1 = dnow
         d0 = (d1 + datetime.timedelta(days=1)) - utils._interval_to_timedelta("1y")
         if fullDaysOnly and self._exchange_open_now():
@@ -173,12 +154,12 @@ class FastInfo:
 
     def _get_1wk_1h_prepost_prices(self):
         if self._prices_1wk_1h_prepost is None:
-            self._prices_1wk_1h_prepost = self._tkr.history(period="5d", interval="1h", auto_adjust=False, prepost=True)
+            self._prices_1wk_1h_prepost = self._tkr.history(period="5d", interval="1h", auto_adjust=False, prepost=True, proxy=self.proxy)
         return self._prices_1wk_1h_prepost
 
     def _get_1wk_1h_reg_prices(self):
         if self._prices_1wk_1h_reg is None:
-            self._prices_1wk_1h_reg = self._tkr.history(period="5d", interval="1h", auto_adjust=False, prepost=False)
+            self._prices_1wk_1h_reg = self._tkr.history(period="5d", interval="1h", auto_adjust=False, prepost=False, proxy=self.proxy)
         return self._prices_1wk_1h_reg
 
     def _get_exchange_metadata(self):
@@ -186,11 +167,11 @@ class FastInfo:
             return self._md
 
         self._get_1y_prices()
-        self._md = self._tkr.get_history_metadata()
+        self._md = self._tkr.get_history_metadata(proxy=self.proxy)
         return self._md
 
     def _exchange_open_now(self):
-        t = pd.Timestamp.now('UTC')
+        t = pd.Timestamp.utcnow()
         self._get_exchange_metadata()
 
         # if self._today_open is None and self._today_close is None:
@@ -217,7 +198,7 @@ class FastInfo:
         if self._currency is not None:
             return self._currency
 
-        md = self._tkr.get_history_metadata()
+        md = self._tkr.get_history_metadata(proxy=self.proxy)
         self._currency = md["currency"]
         return self._currency
 
@@ -226,7 +207,7 @@ class FastInfo:
         if self._quote_type is not None:
             return self._quote_type
 
-        md = self._tkr.get_history_metadata()
+        md = self._tkr.get_history_metadata(proxy=self.proxy)
         self._quote_type = md["instrumentType"]
         return self._quote_type
 
@@ -251,9 +232,7 @@ class FastInfo:
         if self._shares is not None:
             return self._shares
 
-        # unit="D" rather than days=... so pandas does not emit the numpy>=2.5
-        # "generic unit" deprecation warning when constructing the Timedelta.
-        shares = self._tkr.get_shares_full(start=pd.Timestamp.now('UTC').date() - pd.Timedelta(548, unit="D"))
+        shares = self._tkr.get_shares_full(start=pd.Timestamp.utcnow().date()-pd.Timedelta(days=548), proxy=self.proxy)
         # if shares is None:
         #     # Requesting 18 months failed, so fallback to shares which should include last year
         #     shares = self._tkr.get_shares()
@@ -486,6 +465,8 @@ class FastInfo:
         except Exception as e:
             if "Cannot retrieve share count" in str(e):
                 shares = None
+            elif "failed to decrypt Yahoo" in str(e):
+                shares = None
             else:
                 raise
 
@@ -503,9 +484,11 @@ class FastInfo:
 
 
 class Quote:
-    def __init__(self, data: YfData, symbol: str):
+
+    def __init__(self, data: YfData, symbol: str, proxy=None):
         self._data = data
         self._symbol = symbol
+        self.proxy = proxy
 
         self._info = None
         self._retired_info = None
@@ -514,7 +497,6 @@ class Quote:
         self._upgrades_downgrades = None
         self._calendar = None
         self._sec_filings = None
-        self._valuation_measures = {}  # keyed by freq
 
         self._already_scraped = False
         self._already_fetched = False
@@ -523,23 +505,21 @@ class Quote:
     @property
     def info(self) -> dict:
         if self._info is None:
-            self._fetch_info()
-            self._fetch_complementary()
+            self._fetch_info(self.proxy)
+            self._fetch_complementary(self.proxy)
 
         return self._info
 
     @property
     def sustainability(self) -> pd.DataFrame:
         if self._sustainability is None:
-            result = self._fetch(modules=['esgScores'])
+            result = self._fetch(self.proxy, modules=['esgScores'])
             if result is None:
                 self._sustainability = pd.DataFrame()
             else:
                 try:
                     data = result["quoteSummary"]["result"][0]
                 except (KeyError, IndexError):
-                    if not YfConfig.debug.hide_exceptions:
-                        raise
                     raise YFDataException(f"Failed to parse json response from Yahoo Finance: {result}")
                 self._sustainability = pd.DataFrame(data)
         return self._sustainability
@@ -547,15 +527,13 @@ class Quote:
     @property
     def recommendations(self) -> pd.DataFrame:
         if self._recommendations is None:
-            result = self._fetch(modules=['recommendationTrend'])
+            result = self._fetch(self.proxy, modules=['recommendationTrend'])
             if result is None:
                 self._recommendations = pd.DataFrame()
             else:
                 try:
                     data = result["quoteSummary"]["result"][0]["recommendationTrend"]["trend"]
                 except (KeyError, IndexError):
-                    if not YfConfig.debug.hide_exceptions:
-                        raise
                     raise YFDataException(f"Failed to parse json response from Yahoo Finance: {result}")
                 self._recommendations = pd.DataFrame(data)
         return self._recommendations
@@ -563,7 +541,7 @@ class Quote:
     @property
     def upgrades_downgrades(self) -> pd.DataFrame:
         if self._upgrades_downgrades is None:
-            result = self._fetch(modules=['upgradeDowngradeHistory'])
+            result = self._fetch(self.proxy, modules=['upgradeDowngradeHistory'])
             if result is None:
                 self._upgrades_downgrades = pd.DataFrame()
             else:
@@ -577,8 +555,6 @@ class Quote:
                     df.index = pd.to_datetime(df.index, unit='s')
                     self._upgrades_downgrades = df
                 except (KeyError, IndexError):
-                    if not YfConfig.debug.hide_exceptions:
-                        raise
                     raise YFDataException(f"Failed to parse json response from Yahoo Finance: {result}")
         return self._upgrades_downgrades
 
@@ -595,109 +571,54 @@ class Quote:
             self._sec_filings = {} if f is None else f
         return self._sec_filings
 
-    @property
-    def valuation_measures(self) -> pd.DataFrame:
-        return self.get_valuation_measures()
-
-    def get_valuation_measures(self, freq="quarterly", periods=5) -> pd.DataFrame:
-        """Valuation measures (market cap, P/E, P/S, P/B, EV/EBITDA, ...).
-
-        Returns a DataFrame with the 9 valuation measures as rows and a
-        ``Current`` column plus period-end date columns (newest first). Values
-        are raw numeric measures (floats, with ``NaN`` for missing cells); the
-        date column labels remain ``"M/D/YYYY"`` strings.
-
-        Args:
-            freq: period columns to return — "quarterly" (default), "monthly",
-                "yearly" or "trailing". The "Current" column always reflects the
-                latest trailing value.
-            periods: cap on the number of period (date) columns returned, newest
-                first. Must be an int >= 0 or None. The default of 5 matches the
-                column count the old key-statistics page showed. ``periods=0``
-                returns only the "Current" column (a 9x1 DataFrame); ``None``
-                (or a value larger than the available history) returns every
-                available period column. The ``valuation`` property uses this
-                default — call the method form to control ``periods``.
-
-        Returns:
-            pd.DataFrame: valuation measures, ``Current`` first, sliced to at
-                most ``periods`` period columns.
-        """
-        # Validate `periods` before any fetch so a bad value never hits the network.
-        if periods is not None:
-            # Accept any integer (incl. numpy ints), but reject bool — it is an
-            # int subclass yet a bool column count is almost always a mistake.
-            if isinstance(periods, bool) or not isinstance(periods, numbers.Integral):
-                raise TypeError(f"periods must be an int >= 0 or None, not {type(periods).__name__}")
-            if periods < 0:
-                raise ValueError("periods must be >= 0 or None")
-
-        if freq not in self._valuation_measures:
-            self._valuation_measures[freq] = self._fetch_valuation_measures(freq)
-        df = self._valuation_measures[freq]
-
-        # The full df is cached per-freq; apply the `periods` cap by slicing on
-        # return so different `periods` values reuse the one cached fetch. Return
-        # a copy (the sliced path already does) so a caller can't mutate the cache.
-        if periods is None or df.empty:
-            return df.copy()
-        date_cols = [c for c in df.columns if c != "Current"]
-        return df[["Current"] + date_cols[:periods]]
-
     @staticmethod
     def valid_modules():
         return quote_summary_valid_modules
 
-    def _fetch(self, modules: list):
+    def _fetch(self, proxy, modules: list):
         if not isinstance(modules, list):
             raise YFException("Should provide a list of modules, see available modules using `valid_modules`")
 
         modules = ','.join([m for m in modules if m in quote_summary_valid_modules])
         if len(modules) == 0:
             raise YFException("No valid modules provided, see available modules using `valid_modules`")
-        params_dict = {"modules": modules, "corsDomain": "finance.yahoo.com", "formatted": "false", "symbol": self._symbol, "lang": YfConfig.locale.lang, "region": YfConfig.locale.region}
+        params_dict = {"modules": modules, "corsDomain": "finance.yahoo.com", "formatted": "false", "symbol": self._symbol}
         try:
-            result = self._data.get_raw_json(_QUOTE_SUMMARY_URL_ + f"/{self._symbol}", params=params_dict)
-        except HTTPError as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            utils.get_yf_logger().error(str(e) + e.response.text)
+            result = self._data.get_raw_json(_QUOTE_SUMMARY_URL_ + f"/{self._symbol}", user_agent_headers=self._data.user_agent_headers, params=params_dict, proxy=proxy)
+        except requests.exceptions.HTTPError as e:
+            utils.get_yf_logger().error(str(e))
             return None
         return result
 
-    def _fetch_additional_info(self):
-        params_dict = {"symbols": self._symbol, "formatted": "false", "lang": YfConfig.locale.lang, "region": YfConfig.locale.region}
+    def _fetch_additional_info(self, proxy):
+        params_dict = {"symbols": self._symbol, "formatted": "false"}
         try:
-            result = self._data.get_raw_json(f"{_QUERY1_URL_}/v7/finance/quote?", params=params_dict)
-        except HTTPError as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            utils.get_yf_logger().error(str(e) + e.response.text)
+            result = self._data.get_raw_json(f"{_QUERY1_URL_}/v7/finance/quote?",
+                                             user_agent_headers=self._data.user_agent_headers,
+                                             params=params_dict, proxy=proxy)
+        except requests.exceptions.HTTPError as e:
+            utils.get_yf_logger().error(str(e))
             return None
         return result
 
-    def _fetch_info(self):
+    def _fetch_info(self, proxy):
         if self._already_fetched:
             return
         self._already_fetched = True
         modules = ['financialData', 'quoteType', 'defaultKeyStatistics', 'assetProfile', 'summaryDetail']
-        result = self._fetch(modules=modules)
-        additional_info = self._fetch_additional_info()
-
+        result = self._fetch(proxy, modules=modules)
+        result.update(self._fetch_additional_info(proxy))
         if result is None:
-            result = {}
-
-        if additional_info is not None:
-            result.update(additional_info)
+            self._info = {}
+            return
 
         query1_info = {}
         for quote in ["quoteSummary", "quoteResponse"]:
-            quote_result = result.get(quote, {}).get("result") or []
-
-            if len(quote_result) > 0:
-                quote_result[0]["symbol"] = self._symbol
+            if quote in result:
+                result[quote]["result"][0]["symbol"] = self._symbol
                 query_info = next(
-                    (info for info in quote_result if info.get("symbol") == self._symbol),
+                    (info for info in result.get(quote, {}).get("result", [])
+                     if info["symbol"] == self._symbol),
                     None,
                 )
                 if query_info:
@@ -736,104 +657,13 @@ class Quote:
 
         self._info = {k: _format(k, v) for k, v in query1_info.items()}
 
-    def _fetch_valuation_measures(self, freq="quarterly"):
-        # Valuation measures come from the fundamentals-timeseries API (the same
-        # source as the income/balance-sheet/cash-flow statements) instead of
-        # scraping the key-statistics web page, which was fragile (it returned an
-        # empty table whenever Yahoo changed the page layout). The returned shape
-        # matches the previous scrape: measures as the index, a 'Current' column
-        # plus period-end date columns (newest first). Values are the raw numeric
-        # measures (floats, with NaN for missing cells) rather than the old
-        # display-formatted strings (e.g. '3.76T', '32.39'). ``freq``
-        # ('quarterly' / 'monthly' / 'yearly' / 'trailing') selects the period
-        # columns; 'Current' always comes from the trailing series.
-        prefix = _VALUATION_FREQ_PREFIX.get(freq)
-        if prefix is None:
-            raise ValueError(f"freq must be one of {list(_VALUATION_FREQ_PREFIX)}, not '{freq}'")
-        keys = list(_VALUATION_MEASURE_LABELS.keys())
-        # Always also fetch the 'trailing' series for the 'Current' column.
-        prefixes = sorted({prefix, "trailing"})
-        types = ",".join(f"{p}{k}" for k in keys for p in prefixes)
-        period1 = int(datetime.datetime(2016, 12, 31).timestamp())
-        period2 = int(pd.Timestamp.now("UTC").ceil("D").timestamp())
-        url = f"{_BASE_URL_}/ws/fundamentals-timeseries/v1/finance/timeseries/{self._symbol}"
-        params = {"symbol": self._symbol, "type": types, "period1": period1, "period2": period2}
-        try:
-            # cache_get (not get_raw_json) to match scrapers/fundamentals.py and
-            # benefit from response caching for the same timeseries endpoint.
-            response = self._data.cache_get(url, params=params)
-            data = json.loads(response.text)
-        except Exception as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            utils.get_yf_logger().error(f"Failed to fetch valuation measures: {e}")
-            return pd.DataFrame()
-
-        try:
-            result = (data.get("timeseries") or {}).get("result") or []
-            period = {}      # label -> {Timestamp: raw value}  (the requested freq)
-            trailing = {}    # label -> {Timestamp: raw value}
-            for item in result:
-                for type_name, points in item.items():
-                    if type_name in ("meta", "timestamp") or not isinstance(points, list):
-                        continue
-                    if prefix != "trailing" and type_name.startswith(prefix):
-                        base, target = type_name[len(prefix):], period
-                    elif type_name.startswith("trailing"):
-                        base, target = type_name[len("trailing"):], trailing
-                    else:
-                        continue
-                    label = _VALUATION_MEASURE_LABELS.get(base)
-                    if label is None:
-                        continue
-                    for point in points:
-                        if not point:
-                            continue
-                        as_of = point.get("asOfDate")
-                        value = (point.get("reportedValue") or {}).get("raw")
-                        if as_of is not None and value is not None:
-                            ts = pd.Timestamp(as_of).normalize()
-                            target.setdefault(label, {})[ts] = value
-            if prefix == "trailing":
-                period = trailing
-            if not period and not trailing:
-                return pd.DataFrame()
-
-            # 'Current' column = each measure's most recent trailing value.
-            current = {label: series[max(series)] for label, series in trailing.items() if series}
-
-            # Every period the API returns, newest first (no artificial cap).
-            dates = sorted({d for series in period.values() for d in series}, reverse=True)
-            date_cols = [f"{d.month}/{d.day}/{d.year}" for d in dates]
-            # Emit every measure as a row, even those with no data — the
-            # key-statistics page always listed all measures, so dropping them
-            # would lose rows the scrape kept (e.g. PEG Ratio / EV-EBITDA for
-            # BRK-B). Missing cells become NaN (the parse only stored non-None
-            # floats, so .get(..., nan) yields the raw value or NaN).
-            rows = {}
-            for label in _VALUATION_MEASURE_LABELS.values():
-                row = {"Current": current.get(label, _np.nan)}
-                series = period.get(label, {})
-                for d, col in zip(dates, date_cols):
-                    row[col] = series.get(d, _np.nan)
-                rows[label] = row
-            df = pd.DataFrame.from_dict(rows, orient="index")
-            df = df.reindex(list(_VALUATION_MEASURE_LABELS.values()))
-            df = df[["Current"] + date_cols]
-            df.index.name = None
-            return df
-        except Exception as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            utils.get_yf_logger().error(f"Failed to parse valuation measures: {e}")
-            return pd.DataFrame()
-
-    def _fetch_complementary(self):
+    def _fetch_complementary(self, proxy):
         if self._already_fetched_complementary:
             return
         self._already_fetched_complementary = True
 
-        self._fetch_info()
+        # self._scrape(proxy)  # decrypt broken
+        self._fetch_info(proxy)
         if self._info is None:
             return
 
@@ -846,7 +676,7 @@ class Quote:
             # p = _re.compile(r'root\.App\.main = (.*);')
             # url = 'https://finance.yahoo.com/quote/{}/key-statistics?p={}'.format(self._ticker.ticker, self._ticker.ticker)
             # try:
-            #     r = session.get(url)
+            #     r = session.get(url, headers=utils.user_agent_headers)
             #     data = _json.loads(p.findall(r.text)[0])
             #     key_stats = data['context']['dispatcher']['stores']['QuoteTimeSeriesStore']["timeSeries"]
             #     for k in keys:
@@ -866,28 +696,27 @@ class Quote:
             for k in keys:
                 url += "&type=" + k
             # Request 6 months of data
-            start = pd.Timestamp.now('UTC').floor("D") - datetime.timedelta(days=365 // 2)
+            start = pd.Timestamp.utcnow().floor("D") - datetime.timedelta(days=365 // 2)
             start = int(start.timestamp())
-            end = pd.Timestamp.now('UTC').ceil("D")
+            end = pd.Timestamp.utcnow().ceil("D")
             end = int(end.timestamp())
             url += f"&period1={start}&period2={end}"
 
-            json_str = self._data.cache_get(url=url).text
+            json_str = self._data.cache_get(url=url, proxy=proxy).text
             json_data = json.loads(json_str)
-            json_result = json_data.get("timeseries") or json_data.get("finance") or {}
-            if json_result.get("error") is not None:
-                raise YFException("Failed to parse json response from Yahoo Finance: " + str(json_result.get("error")))
-            result = json_result.get("result") or []
-            keydict = result[0] if result else {}
+            json_result = json_data.get("timeseries") or json_data.get("finance")
+            if json_result["error"] is not None:
+                raise YFException("Failed to parse json response from Yahoo Finance: " + str(json_result["error"]))
             for k in keys:
-                if k in keydict and keydict[k]:
-                    self._info[k] = keydict[k][-1].get("reportedValue", {}).get("raw")
+                keydict = json_result["result"][0]
+                if k in keydict:
+                    self._info[k] = keydict[k][-1]["reportedValue"]["raw"]
                 else:
-                    self._info[k] = None
+                    self.info[k] = None
 
     def _fetch_calendar(self):
         # secFilings return too old data, so not requesting it for now
-        result = self._fetch(modules=['calendarEvents'])
+        result = self._fetch(self.proxy, modules=['calendarEvents'])
         if result is None:
             self._calendar = {}
             return
@@ -910,13 +739,11 @@ class Quote:
                 self._calendar['Revenue Low'] = earnings.get('revenueLow', None)
                 self._calendar['Revenue Average'] = earnings.get('revenueAverage', None)
         except (KeyError, IndexError):
-            if not YfConfig.debug.hide_exceptions:
-                raise
             raise YFDataException(f"Failed to parse json response from Yahoo Finance: {result}")
 
 
     def _fetch_sec_filings(self):
-        result = self._fetch(modules=['secFilings'])
+        result = self._fetch(self.proxy, modules=['secFilings'])
         if result is None:
             return None
 

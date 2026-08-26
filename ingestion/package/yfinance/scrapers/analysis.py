@@ -1,18 +1,19 @@
-from yfinance._http import HTTPError
 import pandas as pd
+import requests
 
 from yfinance import utils
-from yfinance.config import YfConfig
-from yfinance.const import quote_summary_valid_modules
 from yfinance.data import YfData
-from yfinance.exceptions import YFException
+from yfinance.const import quote_summary_valid_modules
 from yfinance.scrapers.quote import _QUOTE_SUMMARY_URL_
+from yfinance.exceptions import YFException
+
 
 class Analysis:
 
-    def __init__(self, data: YfData, symbol: str):
+    def __init__(self, data: YfData, symbol: str, proxy=None):
         self._data = data
         self._symbol = symbol
+        self.proxy = proxy
 
         # In quoteSummary the 'earningsTrend' module contains most of the data below.
         # The format of data is not optimal so each function will process it's part of the data.
@@ -27,12 +28,11 @@ class Analysis:
         self._eps_revisions = None
         self._growth_estimates = None
 
-    def _get_periodic_df(self, key, currency_key=None) -> pd.DataFrame:
+    def _get_periodic_df(self, key) -> pd.DataFrame:
         if self._earnings_trend is None:
             self._fetch_earnings_trend()
 
         data = []
-        currency = None
         for item in self._earnings_trend[:4]:
             row = {'period': item['period']}
             for k, v in item[key].items():
@@ -40,41 +40,36 @@ class Analysis:
                     continue
                 row[k] = v['raw']
             data.append(row)
-            if currency is None and currency_key is not None:
-                currency = item[key].get(currency_key)
         if len(data) == 0:
             return pd.DataFrame()
-        df = pd.DataFrame(data).set_index('period')
-        if currency is not None:
-            df['currency'] = currency
-        return df
+        return pd.DataFrame(data).set_index('period')
 
     @property
     def earnings_estimate(self) -> pd.DataFrame:
         if self._earnings_estimate is not None:
             return self._earnings_estimate
-        self._earnings_estimate = self._get_periodic_df('earningsEstimate', currency_key='earningsCurrency')
+        self._earnings_estimate = self._get_periodic_df('earningsEstimate')
         return self._earnings_estimate
 
     @property
     def revenue_estimate(self) -> pd.DataFrame:
         if self._revenue_estimate is not None:
             return self._revenue_estimate
-        self._revenue_estimate = self._get_periodic_df('revenueEstimate', currency_key='revenueCurrency')
+        self._revenue_estimate = self._get_periodic_df('revenueEstimate')
         return self._revenue_estimate
 
     @property
     def eps_trend(self) -> pd.DataFrame:
         if self._eps_trend is not None:
             return self._eps_trend
-        self._eps_trend = self._get_periodic_df('epsTrend', currency_key='epsTrendCurrency')
+        self._eps_trend = self._get_periodic_df('epsTrend')
         return self._eps_trend
 
     @property
     def eps_revisions(self) -> pd.DataFrame:
         if self._eps_revisions is not None:
             return self._eps_revisions
-        self._eps_revisions = self._get_periodic_df('epsRevisions', currency_key='epsRevisionsCurrency')
+        self._eps_revisions = self._get_periodic_df('epsRevisions')
         return self._eps_revisions
 
     @property
@@ -86,8 +81,6 @@ class Analysis:
             data = self._fetch(['financialData'])
             data = data['quoteSummary']['result'][0]['financialData']
         except (TypeError, KeyError):
-            if not YfConfig.debug.hide_exceptions:
-                raise
             self._analyst_price_targets = {}
             return self._analyst_price_targets
 
@@ -111,8 +104,6 @@ class Analysis:
             data = self._fetch(['earningsHistory'])
             data = data['quoteSummary']['result'][0]['earningsHistory']['history']
         except (TypeError, KeyError):
-            if not YfConfig.debug.hide_exceptions:
-                raise
             self._earnings_history = pd.DataFrame()
             return self._earnings_history
 
@@ -149,8 +140,6 @@ class Analysis:
             trends = self._fetch(['industryTrend', 'sectorTrend', 'indexTrend'])
             trends = trends['quoteSummary']['result'][0]
         except (TypeError, KeyError):
-            if not YfConfig.debug.hide_exceptions:
-                raise
             self._growth_estimates = pd.DataFrame()
             return self._growth_estimates
 
@@ -186,11 +175,9 @@ class Analysis:
             raise YFException("No valid modules provided, see available modules using `valid_modules`")
         params_dict = {"modules": modules, "corsDomain": "finance.yahoo.com", "formatted": "false", "symbol": self._symbol}
         try:
-            result = self._data.get_raw_json(_QUOTE_SUMMARY_URL_ + f"/{self._symbol}", params=params_dict)
-        except HTTPError as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            utils.get_yf_logger().error(str(e) + e.response.text)
+            result = self._data.get_raw_json(_QUOTE_SUMMARY_URL_ + f"/{self._symbol}", user_agent_headers=self._data.user_agent_headers, params=params_dict, proxy=self.proxy)
+        except requests.exceptions.HTTPError as e:
+            utils.get_yf_logger().error(str(e))
             return None
         return result
 
@@ -199,6 +186,4 @@ class Analysis:
             data = self._fetch(['earningsTrend'])
             self._earnings_trend = data['quoteSummary']['result'][0]['earningsTrend']['trend']
         except (TypeError, KeyError):
-            if not YfConfig.debug.hide_exceptions:
-                raise
             self._earnings_trend = []

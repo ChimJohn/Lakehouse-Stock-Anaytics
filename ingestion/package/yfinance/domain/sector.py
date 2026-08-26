@@ -1,13 +1,12 @@
 from __future__ import print_function
+from typing import Dict, Optional
+from ..utils import dynamic_docstring, generate_list_table_from_dict
+from ..const import SECTOR_INDUSTY_MAPPING
 
 import pandas as _pd
-from typing import Dict, Optional
-
-from ..config import YfConfig
-from ..const import SECTOR_INDUSTY_MAPPING_LC
-from ..utils import dynamic_docstring, generate_list_table_from_dict, get_yf_logger
 
 from .domain import Domain, _QUERY_URL_
+from .. import utils
 
 class Sector(Domain):
     """
@@ -15,21 +14,19 @@ class Sector(Domain):
     such as top ETFs, top mutual funds, and industry data.
     """
 
-    def __init__(self, key, session=None, region: str = "US"):
+    def __init__(self, key, session=None, proxy=None):
         """
         Args:
             key (str): The key representing the sector.
             session (requests.Session, optional): A session for making requests. Defaults to None.
-            region (str): Yahoo region (ISO 3166-1 alpha-2 country code, e.g.
-                "US", "GB", "FR", "DE", "JP"). Scopes ``top_companies``,
-                ``top_etfs`` and ``top_mutual_funds``. Defaults to "US".
-
+            proxy (dict, optional): A dictionary containing proxy settings for the request. Defaults to None.
+        
         .. seealso::
-
+   
             :attr:`Sector.industries <yfinance.Sector.industries>`
                 Map of sector and industry
         """
-        super(Sector, self).__init__(key, session, region)
+        super(Sector, self).__init__(key, session, proxy)
         self._query_url: str = f'{_QUERY_URL_}/sectors/{self._key}'
         self._top_etfs: Optional[Dict] = None
         self._top_mutual_funds: Optional[Dict] = None
@@ -66,7 +63,7 @@ class Sector(Domain):
         self._ensure_fetched(self._top_mutual_funds)
         return self._top_mutual_funds
 
-    @dynamic_docstring({"sector_industry": generate_list_table_from_dict(SECTOR_INDUSTY_MAPPING_LC,bullets=True)})
+    @dynamic_docstring({"sector_industry": generate_list_table_from_dict(SECTOR_INDUSTY_MAPPING,bullets=True)})
     @property
     def industries(self) -> _pd.DataFrame:
         """
@@ -136,7 +133,7 @@ class Sector(Domain):
         result = None
         
         try:
-            result = self._fetch(self._query_url)
+            result = self._fetch(self._query_url, self.proxy)
             data = result['data']
             self._parse_and_assign_common(data)
 
@@ -145,9 +142,7 @@ class Sector(Domain):
             self._industries = self._parse_industries(data.get('industries', {}))
 
         except Exception as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            logger = get_yf_logger()
+            logger = utils.get_yf_logger()
             logger.error(f"Failed to get sector data for '{self._key}' reason: {e}")
             logger.debug("Got response: ")
             logger.debug("-------------")

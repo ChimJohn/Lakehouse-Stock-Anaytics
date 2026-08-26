@@ -13,15 +13,8 @@ class YFNotImplementedError(NotImplementedError):
 
 
 class YFTickerMissingError(YFException):
-    """Expected ticker data is missing.
-
-    By default the message speculates the ticker is delisted, because Yahoo
-    rarely explains the absence. Pass possibly_delisted=False when the real
-    cause is known, so the message does not mislead.
-    """
-    def __init__(self, ticker, rationale, possibly_delisted=True):
-        prefix = "possibly delisted; " if possibly_delisted else ""
-        super().__init__(f"${ticker}: {prefix}{rationale}")
+    def __init__(self, ticker, rationale):
+        super().__init__(f"${ticker}: possibly delisted; {rationale}")
         self.rationale = rationale
         self.ticker = ticker
 
@@ -32,20 +25,9 @@ class YFTzMissingError(YFTickerMissingError):
 
 
 class YFPricesMissingError(YFTickerMissingError):
-    """Yahoo returned no price data for the requested range/interval.
-
-    When Yahoo states an explicit reason, pass it as yahoo_reason: that
-    reason becomes the whole message and the speculative 'possibly delisted'
-    prefix and generic 'no price data found' text are dropped, because Yahoo
-    has already explained the absence. Otherwise the message reports the
-    request context (debug_info) and keeps the delisting speculation.
-    """
-    def __init__(self, ticker, debug_info, yahoo_reason=None):
+    def __init__(self, ticker, debug_info):
         self.debug_info = debug_info
-        self.yahoo_reason = yahoo_reason
-        if yahoo_reason is not None:
-            super().__init__(ticker, yahoo_reason, possibly_delisted=False)
-        elif debug_info != '':
+        if debug_info != '':
             super().__init__(ticker, f"no price data found {debug_info}")
         else:
             super().__init__(ticker, "no price data found")
@@ -63,7 +45,7 @@ class YFInvalidPeriodError(YFException):
         self.invalid_period = invalid_period
         self.valid_ranges = valid_ranges
         super().__init__(f"{self.ticker}: Period '{invalid_period}' is invalid, "
-                         f"must be one of: {valid_ranges}")
+                         f"must be of the format {valid_ranges}, etc.")
 
 
 class YFRateLimitError(YFException):

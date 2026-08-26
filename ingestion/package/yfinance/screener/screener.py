@@ -1,22 +1,20 @@
-from yfinance._http import HTTPError
-from typing import Union
-import warnings
-from json import dumps
-
-from yfinance.const import _QUERY1_URL_
-from yfinance.data import YfData
-from ..utils import dynamic_docstring, generate_list_table_from_dict_universal
-
 from .query import EquityQuery as EqyQy
 from .query import FundQuery as FndQy
-from .query import ETFQuery as EtfQy
-from .query import QueryBase, EquityQuery, FundQuery, ETFQuery
+from .query import QueryBase, EquityQuery, FundQuery
 
-_SCREENER_URL_ = f"{_QUERY1_URL_}/v1/finance/screener"
+from yfinance.const import _BASE_URL_
+from yfinance.data import YfData
+
+from ..utils import dynamic_docstring, generate_list_table_from_dict_universal
+
+from typing import Union
+import requests
+
+_SCREENER_URL_ = f"{_BASE_URL_}/v1/finance/screener"
 _PREDEFINED_URL_ = f"{_SCREENER_URL_}/predefined/saved"
 
 PREDEFINED_SCREENER_BODY_DEFAULTS = {
-    "offset":0, "count":25, "userId":"","userIdType":"guid"
+    "offset":0, "size":25, "userId":"","userIdType":"guid"
 }
 
 PREDEFINED_SCREENER_QUERIES = {
@@ -30,7 +28,7 @@ PREDEFINED_SCREENER_QUERIES = {
                                 "query": EqyQy('and', [EqyQy('gte', ['quarterlyrevenuegrowth.quarterly', 25]), EqyQy('gte', ['epsgrowth.lasttwelvemonths', 25]), EqyQy('eq', ['sector', 'Technology']), EqyQy('is-in', ['exchange', 'NMS', 'NYQ'])])},
     'most_actives': {"sortField":"dayvolume", "sortType":"DESC",
                     "query": EqyQy('and', [EqyQy('eq', ['region', 'us']), EqyQy('gte', ['intradaymarketcap', 2000000000]), EqyQy('gt', ['dayvolume', 5000000])])},
-    'most_shorted_stocks': {"count":25, "offset":0, "sortField":"short_percentage_of_shares_outstanding.value", "sortType":"DESC", 
+    'most_shorted_stocks': {"size":25, "offset":0, "sortField":"short_percentage_of_shares_outstanding.value", "sortType":"DESC", 
                             "query": EqyQy('and', [EqyQy('eq', ['region', 'us']), EqyQy('gt', ['intradayprice', 1]), EqyQy('gt', ['avgdailyvol3m', 200000])])},
     'small_cap_gainers': {"sortField":"eodvolume", "sortType":"desc", 
                         "query": EqyQy("and", [EqyQy("lt", ["intradaymarketcap",2000000000]), EqyQy("is-in", ["exchange", "NMS", "NYQ"])])},
@@ -49,32 +47,23 @@ PREDEFINED_SCREENER_QUERIES = {
     'solid_midcap_growth_funds': {"sortType":"DESC", "sortField":"fundnetassets",
                                 "query": FndQy('and', [FndQy('eq', ['categoryname', 'Mid-Cap Growth']), FndQy('is-in', ['performanceratingoverall', 4, 5]), FndQy('lt', ['initialinvestment', 100001]), FndQy('lt', ['annualreturnnavy1categoryrank', 50]), FndQy('eq', ['exchange', 'NAS'])])},
     'top_mutual_funds': {"sortType":"DESC", "sortField":"percentchange",
-                        "query": FndQy('and', [FndQy('gt', ['intradayprice', 15]), FndQy('is-in', ['performanceratingoverall', 4, 5]), FndQy('gt', ['initialinvestment', 1000]), FndQy('eq', ['exchange', 'NAS'])])},
-    'top_etfs_us': {"sortField":"percentchange", "sortType":"DESC",
-                    "query": EtfQy('and', [EtfQy('gt', ['intradayprice', 10]), EtfQy('is-in', ['performanceratingoverall', 4, 5]), EtfQy('eq', ['region', 'us'])])},
-    'top_performing_etfs': {"sortField":"annualreportnetexpenseratio", "sortType":"ASC",
-                            "query": EtfQy('and', [EtfQy('eq', ['region', 'us']), EtfQy('is-in', ['performanceratingoverall', 4, 5]), EtfQy('gt', ['intradayprice', 10])])},
-    'technology_etfs': {"sortField":"annualreportnetexpenseratio", "sortType":"ASC",
-                        "query": EtfQy('and', [EtfQy('eq', ['region', 'us']), EtfQy('eq', ['categoryname', 'Technology'])])},
-    'bond_etfs': {"sortField":"annualreportnetexpenseratio", "sortType":"ASC",
-                "query": EtfQy('and', [EtfQy('eq', ['region', 'us']), EtfQy('is-in', ['categoryname', 'Corporate Bond', 'Emerging Markets Bond', 'Emerging-Markets Local-Currency Bond', 'High Yield Bond', 'Intermediate-Term Bond', 'Long-Term Bond', 'Inflation-Protected Bond', 'Multisector Bond', 'Nontraditional Bond', 'Short-Term Bond', 'Ultrashort Bond', 'World Bond'])])}
+                        "query": FndQy('and', [FndQy('gt', ['intradayprice', 15]), FndQy('is-in', ['performanceratingoverall', 4, 5]), FndQy('gt', ['initialinvestment', 1000]), FndQy('eq', ['exchange', 'NAS'])])}
 }
 
 @dynamic_docstring({"predefined_screeners": generate_list_table_from_dict_universal(PREDEFINED_SCREENER_QUERIES, bullets=True, title='Predefined queries (Dec-2024)')})
-def screen(query: Union[str, EquityQuery, FundQuery, ETFQuery],
+def screen(query: Union[str, EquityQuery, FundQuery],
             offset: int = None, 
-            size: int = None,
-            count: int = None,
+            size: int = None, 
             sortField: str = None, 
             sortAsc: bool = None,
             userId: str = None, 
             userIdType: str = None, 
-            session = None):
+            session = None, proxy = None):
     """
     Run a screen: predefined query, or custom query.
 
     :Parameters:
-        * Defaults only apply if query = EquityQuery, FundQuery, or ETFQuery
+        * Defaults only apply if query = EquityQuery or FundQuery
         query : str | Query:
             The query to execute, either name of predefined or custom query.
             For predefined list run yf.PREDEFINED_SCREENER_QUERIES.keys()
@@ -82,10 +71,6 @@ def screen(query: Union[str, EquityQuery, FundQuery, ETFQuery],
             The offset for the results. Default 0.
         size : int
             number of results to return. Default 100, maximum 250 (Yahoo)
-            Use count instead for predefined queries.
-        count : int
-            number of results to return. Default 25, maximum 250 (Yahoo)
-            Use size instead for custom queries.
         sortField : str
             field to sort by. Default "ticker"
         sortAsc : bool
@@ -121,39 +106,25 @@ def screen(query: Union[str, EquityQuery, FundQuery, ETFQuery],
     {predefined_screeners}
     """
 
-    _data = YfData(session=session)
-
     # Only use defaults when user NOT give a predefined, because
     # Yahoo's predefined endpoint auto-applies defaults. Also,
     # that endpoint might be ignoring these fields.
     defaults = {
         'offset': 0,
-        'count': 25,
+        'size': 25,
         'sortField': 'ticker',
         'sortAsc': False,
         'userId': "",
         'userIdType': "guid"
     }
 
-    if count is not None and count > 250:
-        raise ValueError("Yahoo limits query count to 250, reduce count.")
-
     if size is not None and size > 250:
         raise ValueError("Yahoo limits query size to 250, reduce size.")
 
-    if offset is not None and isinstance(query, str):
-        # offset ignored by predefined API so switch to other API
-        post_query = PREDEFINED_SCREENER_QUERIES[query]
-        query = post_query['query']
-        # use predefined's attributes if user not specified
-        if sortField is None:
-            sortField = post_query['sortField']
-        if sortAsc is None:
-            sortAsc = post_query['sortType'].lower() == 'asc'
-        # and don't use defaults
-        defaults = {}
-
-    fields = {'offset': offset, 'count': count, "size": size, 'sortField': sortField, 'sortAsc': sortAsc, 'userId': userId, 'userIdType': userIdType}
+    fields = dict(locals())
+    for k in ['query', 'session', 'proxy']:
+        if k in fields:
+            del fields[k]
 
     params_dict = {"corsDomain": "finance.yahoo.com", "formatted": "false", "lang": "en-US", "region": "US"}
 
@@ -161,22 +132,15 @@ def screen(query: Union[str, EquityQuery, FundQuery, ETFQuery],
     if isinstance(query, str):
         # post_query = PREDEFINED_SCREENER_QUERIES[query]
         # Switch to Yahoo's predefined endpoint
-
-        if size is not None:
-            warnings.warn("Screen 'size' argument is deprecated for predefined screens, set 'count' instead.", DeprecationWarning, stacklevel=2)
-            count = size
-            size = None
-            fields['count'] = fields['size']
-            del fields['size']
-
+        _data = YfData(session=session)
         params_dict['scrIds'] = query
         for k,v in fields.items():
             if v is not None:
                 params_dict[k] = v
-        resp = _data.get(url=_PREDEFINED_URL_, params=params_dict)
+        resp = _data.get(url=_PREDEFINED_URL_, params=params_dict, proxy=proxy)
         try:
             resp.raise_for_status()
-        except HTTPError:
+        except requests.exceptions.HTTPError:
             if query not in PREDEFINED_SCREENER_QUERIES:
                 print(f"yfinance.screen: '{query}' is probably not a predefined query.")
             raise
@@ -203,14 +167,14 @@ def screen(query: Union[str, EquityQuery, FundQuery, ETFQuery],
         post_query['quoteType'] = 'EQUITY'
     elif isinstance(post_query['query'], FndQy):
         post_query['quoteType'] = 'MUTUALFUND'
-    elif isinstance(post_query['query'], EtfQy):
-        post_query['quoteType'] = 'ETF'
     post_query['query'] = post_query['query'].to_dict()
-    data = dumps(post_query, separators=(",", ":"), ensure_ascii=False)
 
     # Fetch
+    _data = YfData(session=session)
     response = _data.post(_SCREENER_URL_, 
-                            data=data, 
-                            params=params_dict)
+                            body=post_query, 
+                            user_agent_headers=_data.user_agent_headers, 
+                            params=params_dict, 
+                            proxy=proxy)
     response.raise_for_status()
     return response.json()['finance']['result'][0]

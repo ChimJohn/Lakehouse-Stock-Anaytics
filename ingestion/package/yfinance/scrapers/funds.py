@@ -1,11 +1,11 @@
 import pandas as pd
-from typing import Dict, Optional
 
-from yfinance import utils
-from yfinance.config import YfConfig
-from yfinance.const import _BASE_URL_
 from yfinance.data import YfData
+from yfinance.const import _BASE_URL_
 from yfinance.exceptions import YFDataException
+from yfinance import utils
+
+from typing import Dict, Optional
 
 _QUOTE_SUMMARY_URL_ = f"{_BASE_URL_}/v10/finance/quoteSummary/"
 
@@ -17,14 +17,16 @@ class FundsData:
     Notes: 
     - fundPerformance module is not implemented as better data is queryable using history
     """
-    def __init__(self, data: YfData, symbol: str):
+    def __init__(self, data: YfData, symbol: str, proxy=None):
         """
         Args:
             data (YfData): The YfData object for fetching data.
             symbol (str): The symbol of the fund.
+            proxy (optional): Proxy settings for fetching data.
         """
         self._data = data
         self._symbol = symbol
+        self.proxy = proxy
         
         # quoteType
         self._quote_type = None
@@ -163,23 +165,26 @@ class FundsData:
             self._fetch_and_parse()
         return self._sector_weightings
 
-    def _fetch(self):
+    def _fetch(self, proxy):
         """
         Fetches the raw JSON data from the API.
+
+        Args:
+            proxy: Proxy settings for fetching data.
 
         Returns:
             dict: The raw JSON data.
         """
         modules = ','.join(["quoteType", "summaryProfile", "topHoldings", "fundProfile"])
         params_dict = {"modules": modules, "corsDomain": "finance.yahoo.com", "symbol": self._symbol, "formatted": "false"}
-        result = self._data.get_raw_json(_QUOTE_SUMMARY_URL_+self._symbol, params=params_dict)
+        result = self._data.get_raw_json(_QUOTE_SUMMARY_URL_+self._symbol, user_agent_headers=self._data.user_agent_headers, params=params_dict, proxy=proxy)
         return result
 
     def _fetch_and_parse(self) -> None:
         """
         Fetches and parses the data from the API.
         """
-        result = self._fetch()
+        result = self._fetch(self.proxy)
         try:
             data = result["quoteSummary"]["result"][0]
             # check quote type
@@ -190,12 +195,8 @@ class FundsData:
             self._parse_top_holdings(data["topHoldings"])
             self._parse_fund_profile(data["fundProfile"])
         except KeyError:
-            if not YfConfig.debug.hide_exceptions:
-                raise
-            raise YFDataException(f"{self._symbol}: No Fund data found.")
+            raise YFDataException("No Fund data found.")
         except Exception as e:
-            if not YfConfig.debug.hide_exceptions:
-                raise
             logger = utils.get_yf_logger()
             logger.error(f"Failed to get fund data for '{self._symbol}' reason: {e}")
             logger.debug("Got response: ")

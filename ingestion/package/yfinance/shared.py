@@ -19,11 +19,8 @@
 # limitations under the License.
 #
 
-import threading
-
 _DFS = {}
 _PROGRESS_BAR = None
 _ERRORS = {}
 _TRACEBACKS = {}
 _ISINS = {}
-_LOCK = threading.Lock()

@@ -1,76 +1,94 @@
 # Databricks notebook — 02_transform.py
-dbutils.widgets.text("raw_bucket", "")
+# Reads silver Parquet from S3, computes valuation scores, writes to gold layer.
+# Uses boto3 + pandas (compatible with Databricks Free Edition serverless)
+
 dbutils.widgets.text("silver_bucket", "")
 dbutils.widgets.text("gold_bucket", "")
 dbutils.widgets.text("aws_access_key", "")
 dbutils.widgets.text("aws_secret_key", "")
+dbutils.widgets.text("aws_region", "ap-southeast-1")
 
 SILVER_BUCKET  = dbutils.widgets.get("silver_bucket")
 GOLD_BUCKET    = dbutils.widgets.get("gold_bucket")
-RAW_BUCKET     = dbutils.widgets.get("raw_bucket")
 AWS_ACCESS_KEY = dbutils.widgets.get("aws_access_key")
 AWS_SECRET_KEY = dbutils.widgets.get("aws_secret_key")
+AWS_REGION     = dbutils.widgets.get("aws_region")
 
-spark.conf.set("fs.s3a.access.key", AWS_ACCESS_KEY)
-spark.conf.set("fs.s3a.secret.key", AWS_SECRET_KEY)
-spark.conf.set("fs.s3a.endpoint", "s3.amazonaws.com")
-spark.conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+import boto3
+import pandas as pd
+import re
+from io import BytesIO
+from datetime import datetime, timezone
 
-SILVER_PATH = f"s3a://{SILVER_BUCKET}/stocks/"
-GOLD_PATH   = f"s3a://{GOLD_BUCKET}/stocks_scored/"
-
-from pyspark.sql import functions as F, Window
-
-silver_df = spark.read.parquet(SILVER_PATH)
-latest_date = silver_df.agg(F.max("date")).collect()[0][0]
-print(f"Processing date: {latest_date}")
-
-df = silver_df.filter(F.col("date") == latest_date)
-
-sector_window = Window.partitionBy("sector")
-df = df.withColumn("sector_median_pe",
-    F.percentile_approx("trailingPE", 0.5).over(sector_window))
-
-df = df.withColumn("pe_ratio",
-    F.when(F.col("sector_median_pe") > 0,
-        F.col("sector_median_pe") / F.col("trailingPE")).otherwise(None)
-).withColumn("pe_score",
-    F.when(F.col("pe_ratio").isNotNull(),
-        F.greatest(F.lit(0.0), F.least(F.lit(1.0), F.col("pe_ratio")))).otherwise(0.5)
-).withColumn("fwd_pe_score",
-    F.when(F.col("forwardPE").isNotNull(),
-        F.greatest(F.lit(0.0), F.least(F.lit(1.0),
-            (F.lit(50.0) - F.col("forwardPE")) / F.lit(45.0)))).otherwise(0.5)
-).withColumn("peg_score",
-    F.when(F.col("pegRatio").isNotNull(),
-        F.greatest(F.lit(0.0), F.least(F.lit(1.0),
-            (F.lit(3.0) - F.col("pegRatio")) / F.lit(2.0)))).otherwise(0.5)
-).withColumn("valuation_score",
-    F.round(
-        (F.col("pe_score") * 0.35 + F.col("fwd_pe_score") * 0.35 + F.col("peg_score") * 0.30) * 100, 1)
-).withColumn("valuation_band",
-    F.when(F.col("valuation_score") >= 70, "undervalued")
-     .when(F.col("valuation_score") >= 40, "fair_value")
-     .otherwise("overvalued")
-).withColumn("scored_at", F.current_timestamp())
-
-gold_df = df.select(
-    "symbol", "shortName", "sector", "industry",
-    "currentPrice", "marketCap",
-    "trailingPE", "forwardPE", "pegRatio",
-    "sector_median_pe", "pe_score", "fwd_pe_score", "peg_score",
-    "valuation_score", "valuation_band",
-    "dividendYield", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
-    "date", "fetched_at", "scored_at"
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id=AWS_ACCESS_KEY,
+    aws_secret_access_key=AWS_SECRET_KEY,
+    region_name=AWS_REGION
 )
 
-print(f"Gold layer: {gold_df.count()} rows")
+# ── Read all silver Parquet files ─────────────────────────────────────────────
+paginator = s3.get_paginator("list_objects_v2")
+pages = paginator.paginate(Bucket=SILVER_BUCKET, Prefix="stocks/")
 
-(gold_df.write.format("delta")
-    .mode("overwrite")
-    .option("replaceWhere", f"date = '{latest_date}'")
-    .partitionBy("date")
-    .save(GOLD_PATH))
+dfs = []
+for page in pages:
+    for obj in page.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith(".parquet"):
+            continue
+        response = s3.get_object(Bucket=SILVER_BUCKET, Key=key)
+        df_part = pd.read_parquet(BytesIO(response["Body"].read()))
+        dfs.append(df_part)
 
-print(f"Written to {GOLD_PATH}")
-display(gold_df.orderBy(F.col("valuation_score").desc()))
+assert len(dfs) > 0, "No silver Parquet files found"
+df = pd.concat(dfs, ignore_index=True)
+
+latest_date = df["date"].max()
+print(f"Processing date: {latest_date}")
+df = df[df["date"] == latest_date].copy()
+
+# ── Valuation scoring ─────────────────────────────────────────────────────────
+# Sector median P/E
+sector_median_pe = df.groupby("sector")["trailingPE"].median()
+df["sector_median_pe"] = df["sector"].map(sector_median_pe)
+
+# P/E score
+df["pe_ratio"] = df.apply(
+    lambda r: r["sector_median_pe"] / r["trailingPE"]
+    if pd.notna(r["sector_median_pe"]) and pd.notna(r["trailingPE"]) and r["trailingPE"] != 0
+    else None, axis=1
+)
+df["pe_score"] = df["pe_ratio"].apply(
+    lambda x: max(0.0, min(1.0, x)) if pd.notna(x) else 0.5
+)
+
+# Forward P/E score
+df["fwd_pe_score"] = df["forwardPE"].apply(
+    lambda x: max(0.0, min(1.0, (50.0 - x) / 45.0)) if pd.notna(x) else 0.5
+)
+
+# PEG score
+df["peg_score"] = df["pegRatio"].apply(
+    lambda x: max(0.0, min(1.0, (3.0 - x) / 2.0)) if pd.notna(x) else 0.5
+)
+
+# Composite score
+df["valuation_score"] = round(
+    (df["pe_score"] * 0.35 + df["fwd_pe_score"] * 0.35 + df["peg_score"] * 0.30) * 100, 1
+)
+df["valuation_band"] = df["valuation_score"].apply(
+    lambda s: "undervalued" if s >= 70 else ("fair_value" if s >= 40 else "overvalued")
+)
+df["scored_at"] = datetime.now(timezone.utc).isoformat()
+
+print(f"Gold layer: {len(df)} rows")
+print(df[["symbol", "valuation_score", "valuation_band"]].sort_values("valuation_score", ascending=False).to_string())
+
+# ── Write gold Parquet ────────────────────────────────────────────────────────
+buffer = BytesIO()
+df.to_parquet(buffer, index=False)
+buffer.seek(0)
+gold_key = f"stocks_scored/date={latest_date}/data.parquet"
+s3.put_object(Bucket=GOLD_BUCKET, Key=gold_key, Body=buffer.getvalue())
+print(f"Written to s3://{GOLD_BUCKET}/{gold_key}")

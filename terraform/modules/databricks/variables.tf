@@ -23,3 +23,8 @@ variable "aws_secret_key" {
   type      = string
   sensitive = true
 }
+
+variable "aws_region" {
+  type    = string
+  default = "ap-southeast-1"
+}

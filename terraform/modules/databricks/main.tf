@@ -29,9 +29,10 @@ resource "databricks_job" "daily_pipeline" {
       notebook_path = databricks_notebook.ingest.path
       base_parameters = {
         raw_bucket     = var.raw_bucket_name
-        iam_role_arn   = var.databricks_iam_role_arn
+        silver_bucket  = var.silver_bucket_name
         aws_access_key = var.aws_access_key
         aws_secret_key = var.aws_secret_key
+        aws_region     = var.aws_region
       }
     }
   }
@@ -44,11 +45,11 @@ resource "databricks_job" "daily_pipeline" {
     notebook_task {
       notebook_path = databricks_notebook.transform.path
       base_parameters = {
-        raw_bucket     = var.raw_bucket_name
         silver_bucket  = var.silver_bucket_name
         gold_bucket    = var.gold_bucket_name
         aws_access_key = var.aws_access_key
         aws_secret_key = var.aws_secret_key
+        aws_region     = var.aws_region
       }
     }
   }
@@ -64,6 +65,7 @@ resource "databricks_job" "daily_pipeline" {
         gold_bucket    = var.gold_bucket_name
         aws_access_key = var.aws_access_key
         aws_secret_key = var.aws_secret_key
+        aws_region     = var.aws_region
       }
     }
   }
@@ -75,5 +77,5 @@ resource "databricks_job" "daily_pipeline" {
 
 # ── SQL Warehouse — use existing default warehouse ────────────────────────────
 data "databricks_sql_warehouse" "default" {
-  name = "Serverless Starter Warehouse"
+  name = "Starter Warehouse"
 }

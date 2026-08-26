@@ -52,5 +52,5 @@ module "databricks" {
   databricks_iam_role_arn = module.s3.databricks_iam_role_arn
   aws_access_key          = var.aws_access_key
   aws_secret_key          = var.aws_secret_key
+  aws_region              = var.aws_region
 }
-

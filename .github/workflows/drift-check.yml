@@ -2,8 +2,8 @@ name: Drift Detection
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # Daily at 6 AM UTC (2 PM SGT)
-  workflow_dispatch:        # Allow manual runs
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
 jobs:
   drift-check:
@@ -34,6 +34,8 @@ jobs:
           TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
           TF_VAR_s3_bucket_prefix: ${{ vars.S3_BUCKET_PREFIX }}
           TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
+          TF_VAR_aws_access_key:   ${{ secrets.TF_VAR_aws_access_key }}
+          TF_VAR_aws_secret_key:   ${{ secrets.TF_VAR_aws_secret_key }}
 
       - name: Terraform Plan (detect drift)
         id: drift
@@ -45,14 +47,14 @@ jobs:
           TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
           TF_VAR_s3_bucket_prefix: ${{ vars.S3_BUCKET_PREFIX }}
           TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
+          TF_VAR_aws_access_key:   ${{ secrets.TF_VAR_aws_access_key }}
+          TF_VAR_aws_secret_key:   ${{ secrets.TF_VAR_aws_secret_key }}
         continue-on-error: true
 
-      # Exit code 0 = no changes, 1 = error, 2 = drift detected
       - name: Fail if drift detected
         if: steps.drift.outputs.exit_code == '2'
         run: |
           echo "⚠️  DRIFT DETECTED: live infrastructure differs from Terraform state!"
-          echo "Run 'terraform apply' to reconcile, or investigate manual changes."
           cat plan_output.txt
           exit 1
 

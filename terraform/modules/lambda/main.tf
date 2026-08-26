@@ -14,7 +14,6 @@ resource "aws_iam_role" "lambda_exec" {
   assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
 }
 
-# Least-privilege: only write to the raw bucket
 data "aws_iam_policy_document" "lambda_s3" {
   statement {
     sid     = "WriteRawBucket"
@@ -30,7 +29,6 @@ resource "aws_iam_role_policy" "lambda_s3" {
   policy = data.aws_iam_policy_document.lambda_s3.json
 }
 
-# Basic Lambda execution (CloudWatch logs)
 resource "aws_iam_role_policy_attachment" "lambda_basic" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
@@ -42,14 +40,9 @@ resource "aws_cloudwatch_log_group" "lambda" {
   retention_in_days = 14
 }
 
-# ── Package the Lambda function ──────────────────────────────────────────────
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/../../../ingestion"
-  output_path = "${path.module}/lambda_function.zip"
-}
-
-# ── Lambda Function ──────────────────────────────────────────────────────────
+# ── Lambda Function — package deployed separately via aws lambda update-function-code ──
+# Terraform manages config only; code is deployed manually from ingestion/lambda_package.zip
+# This avoids storing a large binary in git or re-deploying on every terraform apply
 resource "aws_lambda_function" "stock_ingest" {
   function_name = var.function_name
   role          = aws_iam_role.lambda_exec.arn
@@ -58,14 +51,20 @@ resource "aws_lambda_function" "stock_ingest" {
   timeout       = 60
   memory_size   = 256
 
-  filename         = data.archive_file.lambda_zip.output_path
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  # Points to a placeholder zip — real code deployed via:
+  # aws lambda update-function-code --s3-bucket <tfstate-bucket> --s3-key lambda_package.zip
+  s3_bucket = var.tfstate_bucket
+  s3_key    = "lambda_package.zip"
 
   environment {
     variables = {
       RAW_BUCKET = var.raw_bucket_name
       TICKERS    = join(",", var.tickers)
     }
+  }
+
+  lifecycle {
+    ignore_changes = [s3_key, s3_bucket, source_code_hash]
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda]

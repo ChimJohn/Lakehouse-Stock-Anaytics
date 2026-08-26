@@ -32,9 +32,6 @@ resource "databricks_job" "daily_pipeline" {
         iam_role_arn = var.databricks_iam_role_arn
       }
     }
-
-    # Serverless compute — required for Databricks Free Edition
-    environment_key = "default"
   }
 
   task {
@@ -50,8 +47,6 @@ resource "databricks_job" "daily_pipeline" {
         gold_bucket   = var.gold_bucket_name
       }
     }
-
-    environment_key = "default"
   }
 
   task {
@@ -65,16 +60,6 @@ resource "databricks_job" "daily_pipeline" {
         gold_bucket = var.gold_bucket_name
       }
     }
-
-    environment_key = "default"
-  }
-
-  # Serverless environment definition
-  environment {
-    environment_key = "default"
-    spec {
-      client = "1"
-    }
   }
 
   tags = {
@@ -84,5 +69,5 @@ resource "databricks_job" "daily_pipeline" {
 
 # ── SQL Warehouse — use existing default warehouse ────────────────────────────
 data "databricks_sql_warehouse" "default" {
-  name = "Serverless Starter Warehouse"
+  name = "Starter Warehouse"
 }

@@ -1,1 +1,1 @@
-{"errorMessage": "Unable to import module 'lambda_function': No module named 'yfinance'", "errorType": "Runtime.ImportModuleError", "requestId": "", "stackTrace": []}
+{"statusCode": 200, "date": "2026-08-26", "tickers_fetched": 10, "tickers_failed": 0, "s3_key": "stocks/date=2026-08-26/snapshot.json"}

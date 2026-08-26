@@ -46,3 +46,5 @@ jobs:
           TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
           TF_VAR_s3_bucket_prefix: ${{ vars.S3_BUCKET_PREFIX }}
           TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
+          TF_VAR_aws_access_key:   ${{ secrets.TF_VAR_aws_access_key }}
+          TF_VAR_aws_secret_key:   ${{ secrets.TF_VAR_aws_secret_key }}

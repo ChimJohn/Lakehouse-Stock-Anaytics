@@ -69,5 +69,5 @@ resource "databricks_job" "daily_pipeline" {
 
 # ── SQL Warehouse — use existing default warehouse ────────────────────────────
 data "databricks_sql_warehouse" "default" {
-  name = "Starter Warehouse"
+  name = "Serverless Starter Warehouse"
 }

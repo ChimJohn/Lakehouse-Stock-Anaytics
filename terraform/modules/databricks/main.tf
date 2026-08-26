@@ -17,7 +17,7 @@ resource "databricks_notebook" "dashboard" {
   source   = "${path.module}/../../../databricks/notebooks/03_dashboard.py"
 }
 
-# ── Databricks Job (daily pipeline) — serverless compute ─────────────────────
+# ── Databricks Job (daily pipeline) ──────────────────────────────────────────
 resource "databricks_job" "daily_pipeline" {
   name = "stock-analytics-daily-pipeline"
 
@@ -28,8 +28,10 @@ resource "databricks_job" "daily_pipeline" {
     notebook_task {
       notebook_path = databricks_notebook.ingest.path
       base_parameters = {
-        raw_bucket   = var.raw_bucket_name
-        iam_role_arn = var.databricks_iam_role_arn
+        raw_bucket     = var.raw_bucket_name
+        iam_role_arn   = var.databricks_iam_role_arn
+        aws_access_key = var.aws_access_key
+        aws_secret_key = var.aws_secret_key
       }
     }
   }
@@ -42,9 +44,11 @@ resource "databricks_job" "daily_pipeline" {
     notebook_task {
       notebook_path = databricks_notebook.transform.path
       base_parameters = {
-        raw_bucket    = var.raw_bucket_name
-        silver_bucket = var.silver_bucket_name
-        gold_bucket   = var.gold_bucket_name
+        raw_bucket     = var.raw_bucket_name
+        silver_bucket  = var.silver_bucket_name
+        gold_bucket    = var.gold_bucket_name
+        aws_access_key = var.aws_access_key
+        aws_secret_key = var.aws_secret_key
       }
     }
   }
@@ -57,7 +61,9 @@ resource "databricks_job" "daily_pipeline" {
     notebook_task {
       notebook_path = databricks_notebook.dashboard.path
       base_parameters = {
-        gold_bucket = var.gold_bucket_name
+        gold_bucket    = var.gold_bucket_name
+        aws_access_key = var.aws_access_key
+        aws_secret_key = var.aws_secret_key
       }
     }
   }

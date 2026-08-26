@@ -13,3 +13,13 @@ variable "gold_bucket_name" {
 variable "databricks_iam_role_arn" {
   type = string
 }
+
+variable "aws_access_key" {
+  type      = string
+  sensitive = true
+}
+
+variable "aws_secret_key" {
+  type      = string
+  sensitive = true
+}

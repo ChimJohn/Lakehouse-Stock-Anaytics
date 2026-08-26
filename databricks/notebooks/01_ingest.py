@@ -1,15 +1,20 @@
 # Databricks notebook — 01_ingest.py
 # Reads raw NDJSON from S3 raw layer, cleans and types it, writes Parquet to silver layer.
 
-# Parameters injected by the Databricks Job
 dbutils.widgets.text("raw_bucket", "")
 dbutils.widgets.text("iam_role_arn", "")
+dbutils.widgets.text("aws_access_key", "")
+dbutils.widgets.text("aws_secret_key", "")
 
-RAW_BUCKET    = dbutils.widgets.get("raw_bucket")
-IAM_ROLE_ARN  = dbutils.widgets.get("iam_role_arn")
+RAW_BUCKET      = dbutils.widgets.get("raw_bucket")
+AWS_ACCESS_KEY  = dbutils.widgets.get("aws_access_key")
+AWS_SECRET_KEY  = dbutils.widgets.get("aws_secret_key")
 
-# Configure S3 access via IAM role
-spark.conf.set("fs.s3a.aws.credentials.provider", "com.amazonaws.auth.InstanceProfileCredentialsProvider")
+# Configure S3 access via AWS keys
+spark.conf.set("fs.s3a.access.key", AWS_ACCESS_KEY)
+spark.conf.set("fs.s3a.secret.key", AWS_SECRET_KEY)
+spark.conf.set("fs.s3a.endpoint", "s3.amazonaws.com")
+spark.conf.set("fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
 
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -22,27 +27,27 @@ SILVER_PATH = RAW_PATH.replace("raw", "silver") + "stocks/"
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 schema = StructType([
-    StructField("symbol",          StringType(),    True),
-    StructField("shortName",       StringType(),    True),
-    StructField("sector",          StringType(),    True),
-    StructField("industry",        StringType(),    True),
-    StructField("currentPrice",    DoubleType(),    True),
-    StructField("marketCap",       LongType(),      True),
-    StructField("trailingPE",      DoubleType(),    True),
-    StructField("forwardPE",       DoubleType(),    True),
-    StructField("pegRatio",        DoubleType(),    True),
-    StructField("trailingEps",     DoubleType(),    True),
-    StructField("forwardEps",      DoubleType(),    True),
-    StructField("priceToBook",     DoubleType(),    True),
-    StructField("dividendYield",   DoubleType(),    True),
-    StructField("fiftyTwoWeekHigh",DoubleType(),    True),
-    StructField("fiftyTwoWeekLow", DoubleType(),    True),
-    StructField("currency",        StringType(),    True),
-    StructField("fetched_at",      StringType(),    True),
-    StructField("error",           StringType(),    True),
+    StructField("symbol",           StringType(), True),
+    StructField("shortName",        StringType(), True),
+    StructField("sector",           StringType(), True),
+    StructField("industry",         StringType(), True),
+    StructField("currentPrice",     DoubleType(), True),
+    StructField("marketCap",        LongType(),   True),
+    StructField("trailingPE",       DoubleType(), True),
+    StructField("forwardPE",        DoubleType(), True),
+    StructField("pegRatio",         DoubleType(), True),
+    StructField("trailingEps",      DoubleType(), True),
+    StructField("forwardEps",       DoubleType(), True),
+    StructField("priceToBook",      DoubleType(), True),
+    StructField("dividendYield",    DoubleType(), True),
+    StructField("fiftyTwoWeekHigh", DoubleType(), True),
+    StructField("fiftyTwoWeekLow",  DoubleType(), True),
+    StructField("currency",         StringType(), True),
+    StructField("fetched_at",       StringType(), True),
+    StructField("error",            StringType(), True),
 ])
 
-# ── Read raw NDJSON (partition discovery) ────────────────────────────────────
+# ── Read raw NDJSON ───────────────────────────────────────────────────────────
 raw_df = (
     spark.read
     .schema(schema)
@@ -51,7 +56,7 @@ raw_df = (
     .withColumn("fetched_at", F.to_timestamp("fetched_at"))
 )
 
-# ── Drop error rows, deduplicate ─────────────────────────────────────────────
+# ── Clean and deduplicate ─────────────────────────────────────────────────────
 silver_df = (
     raw_df
     .filter(F.col("error").isNull())
@@ -64,7 +69,7 @@ row_count = silver_df.count()
 print(f"Silver layer: {row_count} rows")
 assert row_count > 0, "Silver layer is empty — check raw data"
 
-# ── Write Parquet partitioned by date ────────────────────────────────────────
+# ── Write Parquet partitioned by date ─────────────────────────────────────────
 (
     silver_df
     .write

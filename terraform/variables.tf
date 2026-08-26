@@ -29,3 +29,15 @@ variable "tickers" {
     "META", "TSLA", "BRK-B", "JPM", "V"
   ]
 }
+
+variable "aws_access_key" {
+  description = "AWS access key for Databricks to access S3"
+  type        = string
+  sensitive   = true
+}
+
+variable "aws_secret_key" {
+  description = "AWS secret key for Databricks to access S3"
+  type        = string
+  sensitive   = true
+}

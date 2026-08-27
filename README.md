@@ -1,6 +1,6 @@
 # 📈 Lakehouse Stock Analytics Platform
 
-A personal investing dashboard backed by a fully IaC-provisioned data lakehouse. Stock data flows daily from Yahoo Finance → AWS Lambda → S3 → Databricks, with all infrastructure managed by Terraform and deployed via GitHub Actions CI/CD.
+A personal investing dashboard backed by a fully IaC-provisioned data lakehouse. Stock data flows daily from Yahoo Finance → AWS Lambda → S3 → Databricks, with valuation scores pushed to Telegram every weekday at pre-market open. All infrastructure is managed by Terraform and deployed via GitHub Actions CI/CD.
 
 ---
 
@@ -10,7 +10,11 @@ A personal investing dashboard backed by a fully IaC-provisioned data lakehouse.
 Yahoo Finance (yfinance)
         │
         ▼
-AWS Lambda                    ← triggered daily by EventBridge (00:00 UTC)
+AWS Lambda                    ← triggered Mon–Fri at 4:15 AM ET (4:15 PM SGT)
+        │                        15 minutes after US pre-market opens
+        ├── scores all tickers
+        ├── writes raw NDJSON to S3
+        └── sends valuation report to Telegram
         │
         ▼
 S3 — raw layer                ← NDJSON snapshots partitioned by date
@@ -33,6 +37,31 @@ Databricks (03_dashboard)     ← valuation heatmap, sector breakdown
 
 ---
 
+## Telegram Report
+
+Every weekday at 4:15 PM SGT, a formatted valuation report is sent to a Telegram channel:
+
+```
+📈 Stock Valuation Report — 2026-08-27
+
+🟢 UNDERVALUED (3)
+  JPM    Score:  74 | P/E:  12.4 | Fwd P/E:  11.8 | PEG:  0.9
+  AAPL   Score:  71 | P/E:  28.1 | Fwd P/E:  24.3 | PEG:  1.2
+  XOM    Score:  70 | P/E:  14.2 | Fwd P/E:  12.9 | PEG:  1.1
+
+🟡 FAIR VALUE (61)
+  MSFT   Score:  58 | P/E:  34.2 | Fwd P/E:  29.1 | PEG:  2.1
+  ...
+
+🔴 OVERVALUED (23)
+  TSLA   Score:  31 | P/E:  89.4 | Fwd P/E:  74.2 | PEG:  4.1
+  ...
+
+Fetched 87 tickers · 2026-08-27 04:15 ET
+```
+
+---
+
 ## Valuation Model
 
 Each stock receives a composite score (0–100) across three metrics:
@@ -50,6 +79,21 @@ Each stock receives a composite score (0–100) across three metrics:
 
 ---
 
+## Tracked Universe (~88 blue chip stocks)
+
+| Sector | Tickers |
+|---|---|
+| Technology | AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AVGO, ORCL, CRM, ADBE, AMD, INTC, QCOM, TXN, IBM, CSCO, NOW, INTU, AMAT |
+| Financials | JPM, BAC, WFC, GS, MS, BLK, AXP, V, MA, C, USB, PNC, SCHW, COF, CB |
+| Healthcare | JNJ, UNH, LLY, PFE, ABBV, MRK, TMO, ABT, DHR, BMY, AMGN, GILD, CVS, MDT |
+| Consumer | PG, KO, PEP, WMT, COST, MCD, NKE, SBUX, TGT, HD, LOW, DIS, CMCSA, VZ, T |
+| Energy | XOM, CVX, COP, SLB, EOG, PSX, MPC, OXY |
+| Industrials | CAT, HON, UPS, BA, GE, MMM, RTX, LMT, DE, ETN |
+| Materials & Real Estate | LIN, APD, SHW, AMT, PLD, EQIX |
+| International ADRs | TSM, ASML, SAP, TM, NVO, SHEL, BP, BHP, SE |
+
+---
+
 ## What's Managed by Terraform
 
 | Resource | Provider |
@@ -57,7 +101,7 @@ Each stock receives a composite score (0–100) across three metrics:
 | S3 buckets (raw / silver / gold) + lifecycle policies | `hashicorp/aws` |
 | IAM roles with least-privilege access | `hashicorp/aws` |
 | Lambda function + CloudWatch log group | `hashicorp/aws` |
-| EventBridge daily schedule | `hashicorp/aws` |
+| EventBridge weekday schedule (Mon–Fri 08:15 UTC) | `hashicorp/aws` |
 | Databricks notebooks (3) | `databricks/databricks` |
 | Databricks job with 3 tasks + dependencies | `databricks/databricks` |
 
@@ -70,12 +114,13 @@ Each stock receives a composite score (0–100) across three metrics:
 | Service | Usage | Cost |
 |---|---|---|
 | Databricks Free Edition | Serverless compute | $0 forever |
-| AWS S3 | ~1 MB/day of stock data | $0 (5 GB free tier) |
-| AWS Lambda | 1 invocation/day | $0 (1M/month free tier) |
+| AWS S3 | ~5 MB/day of stock data | $0 (5 GB free tier) |
+| AWS Lambda | 1 invocation/weekday | $0 (1M/month free tier) |
 | AWS EventBridge | 1 scheduled rule | $0 |
 | AWS CloudWatch Logs | Lambda logs | $0 (5 GB free tier) |
 | GitHub Actions | CI/CD pipeline | $0 (2,000 min/month free) |
 | yfinance | Stock data | $0, no API key required |
+| Telegram Bot API | Valuation alerts | $0 |
 | Terraform | IaC | $0, open source |
 
 ---
@@ -104,8 +149,8 @@ Daily 06:00   →  drift-check.yml detects infra divergence from Terraform state
 │   ├── backend.tf                     # S3 remote state
 │   └── modules/
 │       ├── s3/                        # Buckets + lifecycle + IAM role
-│       ├── lambda/                    # Ingestion function + IAM
-│       ├── eventbridge/               # Daily schedule rule
+│       ├── lambda/                    # Ingestion function + IAM + Telegram
+│       ├── eventbridge/               # Weekday schedule rule
 │       └── databricks/                # Notebooks, job, SQL warehouse
 ├── databricks/
 │   ├── notebooks/
@@ -115,7 +160,7 @@ Daily 06:00   →  drift-check.yml detects infra divergence from Terraform state
 │   └── schemas/
 │       └── gold_schema.sql            # Delta table schema reference
 ├── ingestion/
-│   ├── lambda_function.py             # yfinance → S3 raw layer
+│   ├── lambda_function.py             # yfinance → S3 + Telegram
 │   └── requirements.txt
 └── .github/workflows/
     ├── terraform-plan.yml             # PR: plan + comment
@@ -130,6 +175,7 @@ Daily 06:00   →  drift-check.yml detects infra divergence from Terraform state
 ### Prerequisites
 - AWS account (free tier)
 - Databricks Free Edition account → [sign up](https://www.databricks.com/learn/free-edition)
+- Telegram bot → create via [@BotFather](https://t.me/BotFather)
 - Terraform >= 1.0
 - AWS CLI
 - Docker Desktop (for building the Lambda package)
@@ -156,7 +202,14 @@ aws s3api create-bucket \
 2. Note your workspace URL (e.g. `https://<id>.cloud.databricks.com`)
 3. Generate a Personal Access Token: **Settings → Developer → Access Tokens**
 
-### 3. Build the Lambda package
+### 3. Create a Telegram bot
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram
+2. Send `/newbot` and follow the prompts
+3. Copy the bot token (e.g. `7123456789:AAF...`)
+4. Add your bot to a group or channel and get the chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates`
+
+### 4. Build the Lambda package
 
 ```bash
 # Requires Docker Desktop running
@@ -183,7 +236,7 @@ aws lambda update-function-code \
   --region ap-southeast-1 --no-cli-pager
 ```
 
-### 4. Configure GitHub secrets and variables
+### 5. Configure GitHub secrets and variables
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
@@ -195,6 +248,8 @@ aws lambda update-function-code \
 | `DATABRICKS_TOKEN` | Your PAT token |
 | `TF_VAR_aws_access_key` | Same as AWS_ACCESS_KEY_ID |
 | `TF_VAR_aws_secret_key` | Same as AWS_SECRET_ACCESS_KEY |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram bot token |
+| `TELEGRAM_CHAT_ID` | Your Telegram chat/group ID |
 
 **Variables** (same page → Variables tab):
 
@@ -203,7 +258,7 @@ aws lambda update-function-code \
 | `TF_VAR_AWS_REGION` | `ap-southeast-1` |
 | `S3_BUCKET_PREFIX` | Your chosen prefix (e.g. `nicky-lakehouse`) |
 
-### 5. Deploy
+### 6. Deploy
 
 ```bash
 git push origin main  # triggers terraform apply via GitHub Actions
@@ -218,6 +273,7 @@ git push origin main  # triggers terraform apply via GitHub Actions
 aws lambda invoke \
   --function-name <your-prefix>-stock-ingest \
   --region ap-southeast-1 \
+  --cli-read-timeout 400 \
   response.json && cat response.json
 ```
 
@@ -235,7 +291,7 @@ GitHub → Actions → Drift Detection → Run workflow
 Databricks Free Edition serverless doesn't allow setting `spark.conf` properties for S3 credentials. Using `boto3` with explicit credentials bypasses this restriction entirely.
 
 **Why is the Lambda package built with Docker?**
-The Lambda runtime runs on Amazon Linux x86_64. Building on an M-series Mac produces ARM binaries that crash on Lambda. Docker with `--platform linux/amd64` cross-compiles correctly.
+The Lambda runtime runs on Amazon Linux x86_64. Building on an M-series Mac produces ARM binaries that crash on Lambda. Docker with `--platform linux/amd64` cross-compiles correctly using Rosetta 2.
 
 **Why is the Databricks workspace created manually?**
 Databricks Free Edition doesn't expose account-level APIs, so Terraform can't provision the workspace itself. This mirrors real enterprise setups where workspace provisioning is a separate bootstrap step.
@@ -243,13 +299,8 @@ Databricks Free Edition doesn't expose account-level APIs, so Terraform can't pr
 **Why is `lifecycle { ignore_changes }` on the Lambda function?**
 The Lambda package is too large to store in git and is deployed separately via `aws lambda update-function-code`. The `ignore_changes` block prevents Terraform from overwriting it on each apply.
 
----
-
-## Tracked Tickers
-
-AAPL · MSFT · GOOGL · AMZN · NVDA · META · TSLA · BRK-B · JPM · V
-
-Configurable via the `tickers` variable in `terraform/variables.tf`.
+**Why weekdays only?**
+US markets are closed on weekends, so pre-market data wouldn't change. The EventBridge cron `cron(15 8 ? * MON-FRI *)` skips Saturday and Sunday automatically.
 
 ---
 
@@ -259,3 +310,4 @@ Configurable via the `tickers` variable in `terraform/variables.tf`.
 - IAM roles follow least-privilege: Lambda can only write to the raw S3 bucket
 - S3 buckets have public access blocked
 - Terraform state is encrypted at rest in S3
+- Telegram bot token is stored as a GitHub secret and passed to Lambda as an environment variable

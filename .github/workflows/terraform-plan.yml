@@ -46,6 +46,8 @@ jobs:
           TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
           TF_VAR_aws_access_key:   ${{ secrets.TF_VAR_aws_access_key }}
           TF_VAR_aws_secret_key:   ${{ secrets.TF_VAR_aws_secret_key }}
+          TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TF_VAR_telegram_chat_id:   ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Terraform Validate
         run: terraform validate
@@ -60,6 +62,8 @@ jobs:
           TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
           TF_VAR_aws_access_key:   ${{ secrets.TF_VAR_aws_access_key }}
           TF_VAR_aws_secret_key:   ${{ secrets.TF_VAR_aws_secret_key }}
+          TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TF_VAR_telegram_chat_id:   ${{ secrets.TELEGRAM_CHAT_ID }}
         continue-on-error: true
 
       - name: Comment plan on PR

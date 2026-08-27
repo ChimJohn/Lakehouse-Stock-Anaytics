@@ -22,3 +22,12 @@ variable "tfstate_bucket" {
   type        = string
   description = "S3 bucket where lambda_package.zip is stored"
 }
+
+variable "telegram_bot_token" {
+  type      = string
+  sensitive = true
+}
+
+variable "telegram_chat_id" {
+  type = string
+}

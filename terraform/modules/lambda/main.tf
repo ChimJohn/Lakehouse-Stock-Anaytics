@@ -40,15 +40,13 @@ resource "aws_cloudwatch_log_group" "lambda" {
   retention_in_days = 14
 }
 
-# ── Lambda Function — package deployed separately via aws lambda update-function-code ──
-# Terraform manages config only; code is deployed manually from ingestion/lambda_package.zip
-# This avoids storing a large binary in git or re-deploying on every terraform apply
+# ── Lambda Function ──────────────────────────────────────────────────────────
 resource "aws_lambda_function" "stock_ingest" {
   function_name = var.function_name
   role          = aws_iam_role.lambda_exec.arn
   handler       = "lambda_function.handler"
   runtime       = "python3.11"
-  timeout       = 60
+  timeout       = 300   # 5 min for 88 tickers with batching
   memory_size   = 256
 
   filename         = "${path.module}/../../../ingestion/placeholder.zip"
@@ -60,8 +58,10 @@ resource "aws_lambda_function" "stock_ingest" {
 
   environment {
     variables = {
-      RAW_BUCKET = var.raw_bucket_name
-      TICKERS    = join(",", var.tickers)
+      RAW_BUCKET          = var.raw_bucket_name
+      TICKERS             = join(",", var.tickers)
+      TELEGRAM_BOT_TOKEN  = var.telegram_bot_token
+      TELEGRAM_CHAT_ID    = var.telegram_chat_id
     }
   }
 

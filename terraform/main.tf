@@ -28,20 +28,22 @@ module "s3" {
 }
 
 module "lambda" {
-  source          = "./modules/lambda"
-  function_name   = "${var.s3_bucket_prefix}-stock-ingest"
-  raw_bucket_name = module.s3.raw_bucket_name
-  raw_bucket_arn  = module.s3.raw_bucket_arn
-  tickers         = var.tickers
-  aws_region      = var.aws_region
-  tfstate_bucket  = "${var.s3_bucket_prefix}-tfstate"
+  source              = "./modules/lambda"
+  function_name       = "${var.s3_bucket_prefix}-stock-ingest"
+  raw_bucket_name     = module.s3.raw_bucket_name
+  raw_bucket_arn      = module.s3.raw_bucket_arn
+  tickers             = var.tickers
+  aws_region          = var.aws_region
+  tfstate_bucket      = "${var.s3_bucket_prefix}-tfstate"
+  telegram_bot_token  = var.telegram_bot_token
+  telegram_chat_id    = var.telegram_chat_id
 }
 
 module "eventbridge" {
   source               = "./modules/eventbridge"
   lambda_function_arn  = module.lambda.function_arn
   lambda_function_name = module.lambda.function_name
-  schedule_expression  = "cron(0 0 * * ? *)"
+  schedule_expression  = "cron(15 8 * * ? *)"  # 4:15 AM ET / 4:15 PM SGT daily
 }
 
 module "databricks" {

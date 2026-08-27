@@ -155,7 +155,7 @@ def handler(event, context):
         for symbol in batch:
             records.append(fetch_ticker(symbol))
         if i + 10 < len(tickers):
-            time.sleep(2)
+            time.sleep(5)
 
     # Compute sector medians for scoring
     from collections import defaultdict

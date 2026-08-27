@@ -43,7 +43,7 @@ module "eventbridge" {
   source               = "./modules/eventbridge"
   lambda_function_arn  = module.lambda.function_arn
   lambda_function_name = module.lambda.function_name
-  schedule_expression  = "cron(15 8 * * ? *)"  # 4:15 AM ET / 4:15 PM SGT daily
+  schedule_expression  = "cron(15 8 ? * MON-FRI *)"  # 4:15 AM ET / 4:15 PM SGT Monday - Friday
 }
 
 module "databricks" {

@@ -25,27 +25,22 @@ variable "tickers" {
   description = "List of stock tickers to track"
   type        = list(string)
   default     = [
-    # Technology
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AVGO",
-    "ORCL", "CRM", "ADBE", "AMD", "INTC", "QCOM", "TXN", "IBM",
-    "CSCO", "NOW", "INTU", "AMAT",
-    # Financials
-    "JPM", "BAC", "WFC", "GS", "MS", "BLK", "AXP", "V", "MA", "C",
-    "USB", "PNC", "SCHW", "COF", "CB",
-    # Healthcare
-    "JNJ", "UNH", "LLY", "PFE", "ABBV", "MRK", "TMO", "ABT",
-    "DHR", "BMY", "AMGN", "GILD", "CVS", "MDT",
-    # Consumer
-    "PG", "KO", "PEP", "WMT", "COST", "MCD", "NKE", "SBUX",
-    "TGT", "HD", "LOW", "DIS", "CMCSA", "VZ", "T",
-    # Energy
-    "XOM", "CVX", "COP", "SLB", "EOG", "PSX", "MPC", "OXY",
-    # Industrials
-    "CAT", "HON", "UPS", "BA", "GE", "MMM", "RTX", "LMT", "DE", "ETN",
-    # Materials & Real Estate
-    "LIN", "APD", "SHW", "AMT", "PLD", "EQIX",
-    # International ADRs
-    "TSM", "ASML", "SAP", "TM", "NVO", "SHEL", "BP", "BHP", "SE"
+    # Technology (15)
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA",
+    "META", "TSLA", "AVGO", "ORCL", "IBM",
+    "AMD", "QCOM", "TXN", "CSCO", "INTC",
+    # Financials (5)
+    "JPM", "GS", "BLK", "V", "MA",
+    # Healthcare (4)
+    "JNJ", "UNH", "LLY", "ABBV",
+    # Consumer (7)
+    "PG", "KO", "WMT", "COST", "MCD", "HD", "DIS",
+    # Energy (4)
+    "XOM", "CVX", "COP", "EOG",
+    # Industrials (5)
+    "CAT", "HON", "BA", "GE", "LMT",
+    # International ADRs (4)
+    "TSM", "ASML", "NVO", "TM"
   ]
 }
 

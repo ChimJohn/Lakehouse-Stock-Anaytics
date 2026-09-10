@@ -1,17 +1,18 @@
 """
 Stock ingestion Lambda
-Fetches stock data from Yahoo Finance directly via requests,
+Fetches stock data from Financial Modeling Prep (FMP) API,
 computes valuation scores, writes to S3, and sends Telegram report.
 
-Uses a long per-ticker delay to avoid AWS IP-range rate limiting from Yahoo.
+FMP free tier: 250 requests/day. Uses batch quote endpoint to
+minimize calls (all tickers in a single request where possible).
 """
 
 import json
 import os
 import logging
-import time
 from datetime import datetime, timezone
 import urllib.request
+import urllib.parse
 
 import boto3
 
@@ -20,65 +21,78 @@ logger.setLevel(logging.INFO)
 
 s3 = boto3.client("s3")
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-DELAY_SECONDS = 15  # per-ticker delay to avoid IP-range rate limiting
+FMP_BASE = "https://financialmodelingprep.com/api/v3"
 
 
-def fetch_ticker(symbol: str) -> dict:
-    url = (
-        f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
-        f"?modules=summaryDetail%2CdefaultKeyStatistics%2CassetProfile%2CfinancialData%2CpriceInfo"
-    )
+def fmp_get(path: str, api_key: str, params: dict = None) -> list:
+    params = params or {}
+    params["apikey"] = api_key
+    url = f"{FMP_BASE}/{path}?{urllib.parse.urlencode(params)}"
+    req = urllib.request.Request(url, headers={"User-Agent": "lakehouse-stock-analytics/1.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_all_tickers(tickers: list, api_key: str) -> list:
+    """Fetch quote + ratios for all tickers using batched FMP calls."""
+    symbols = ",".join(tickers)
+
+    # /quote supports comma-separated symbols in a single call
     try:
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-
-        result = data.get("quoteSummary", {}).get("result", [])
-        if not result:
-            raise ValueError("Empty result")
-
-        r = result[0]
-        summary   = r.get("summaryDetail", {})
-        key_stats = r.get("defaultKeyStatistics", {})
-        profile   = r.get("assetProfile", {})
-        fin_data  = r.get("financialData", {})
-
-        def val(d, k):
-            v = d.get(k)
-            if isinstance(v, dict):
-                return v.get("raw")
-            return v
-
-        record = {
-            "symbol":           symbol,
-            "shortName":        val(r.get("price", {}), "shortName") or symbol,
-            "sector":           profile.get("sector"),
-            "industry":         profile.get("industry"),
-            "currentPrice":     val(fin_data, "currentPrice") or val(summary, "regularMarketPrice"),
-            "marketCap":        val(summary, "marketCap"),
-            "trailingPE":       val(summary, "trailingPE"),
-            "forwardPE":        val(summary, "forwardPE"),
-            "pegRatio":         val(key_stats, "pegRatio"),
-            "trailingEps":      val(key_stats, "trailingEps"),
-            "forwardEps":       val(key_stats, "forwardEps"),
-            "priceToBook":      val(key_stats, "priceToBook"),
-            "dividendYield":    val(summary, "dividendYield"),
-            "fiftyTwoWeekHigh": val(summary, "fiftyTwoWeekHigh"),
-            "fiftyTwoWeekLow":  val(summary, "fiftyTwoWeekLow"),
-            "currency":         val(summary, "currency"),
-            "fetched_at":       datetime.now(timezone.utc).isoformat(),
-        }
-        return record
-
+        quotes = fmp_get(f"quote/{symbols}", api_key)
     except Exception as e:
-        logger.error(f"Failed to fetch {symbol}: {e}")
-        return {"symbol": symbol, "error": str(e), "fetched_at": datetime.now(timezone.utc).isoformat()}
+        logger.error(f"Batch quote fetch failed: {e}")
+        quotes = []
+
+    quote_by_symbol = {q["symbol"]: q for q in quotes if isinstance(q, dict) and "symbol" in q}
+
+    # /ratios-ttm and /profile need per-symbol calls on the free tier;
+    # profile gives sector, ratios-ttm gives PEG. Fetch both per ticker.
+    records = []
+    for symbol in tickers:
+        q = quote_by_symbol.get(symbol)
+        if not q:
+            records.append({"symbol": symbol, "error": "No quote data",
+                             "fetched_at": datetime.now(timezone.utc).isoformat()})
+            continue
+
+        sector = None
+        peg_ratio = None
+        try:
+            profile = fmp_get(f"profile/{symbol}", api_key)
+            if profile and isinstance(profile, list):
+                sector = profile[0].get("sector")
+        except Exception as e:
+            logger.error(f"Profile fetch failed for {symbol}: {e}")
+
+        try:
+            ratios = fmp_get(f"ratios-ttm/{symbol}", api_key)
+            if ratios and isinstance(ratios, list):
+                peg_ratio = ratios[0].get("pegRatioTTM")
+        except Exception as e:
+            logger.error(f"Ratios fetch failed for {symbol}: {e}")
+
+        records.append({
+            "symbol":           symbol,
+            "shortName":        q.get("name") or symbol,
+            "sector":           sector,
+            "industry":         None,
+            "currentPrice":     q.get("price"),
+            "marketCap":        q.get("marketCap"),
+            "trailingPE":       q.get("pe"),
+            "forwardPE":        None,  # not on free tier; derive fallback below
+            "pegRatio":         peg_ratio,
+            "trailingEps":      q.get("eps"),
+            "forwardEps":       None,
+            "priceToBook":      None,
+            "dividendYield":    None,
+            "fiftyTwoWeekHigh": q.get("yearHigh"),
+            "fiftyTwoWeekLow":  q.get("yearLow"),
+            "currency":         "USD",
+            "fetched_at":       datetime.now(timezone.utc).isoformat(),
+        })
+
+    return records
 
 
 def score_ticker(record: dict, sector_medians: dict) -> dict:
@@ -91,13 +105,14 @@ def score_ticker(record: dict, sector_medians: dict) -> dict:
     else:
         pe_score = 0.5
 
-    fwd_pe = record.get("forwardPE")
+    # No forward P/E on free tier — fall back to trailing P/E signal only
+    fwd_pe = record.get("forwardPE") or record.get("trailingPE")
     fwd_pe_score = max(0.0, min(1.0, (50.0 - fwd_pe) / 45.0)) if fwd_pe is not None else 0.5
 
     peg = record.get("pegRatio")
     peg_score = max(0.0, min(1.0, (3.0 - peg) / 2.0)) if peg is not None else 0.5
 
-    valuation_score = round((pe_score * 0.35 + fwd_pe_score * 0.35 + peg_score * 0.30) * 100, 1)
+    valuation_score = round((pe_score * 0.45 + fwd_pe_score * 0.25 + peg_score * 0.30) * 100, 1)
 
     if valuation_score >= 70:
         band = "undervalued"
@@ -135,10 +150,9 @@ def format_telegram_message(scored: list, run_date: str) -> str:
 
     def fmt_row(r):
         pe  = f"{r['trailingPE']:.1f}" if r.get("trailingPE") else "N/A"
-        fpe = f"{r['forwardPE']:.1f}"  if r.get("forwardPE")  else "N/A"
         peg = f"{r['pegRatio']:.2f}"   if r.get("pegRatio")   else "N/A"
         return (f"  <b>{r['symbol']:<6}</b> Score:{r['valuation_score']:>5} | "
-                f"P/E:{pe:>6} | Fwd:{fpe:>6} | PEG:{peg:>5}")
+                f"P/E:{pe:>6} | PEG:{peg:>5}")
 
     lines = [f"📈 <b>Stock Valuation — {run_date}</b>\n"]
 
@@ -166,15 +180,12 @@ def handler(event, context):
     tickers  = [t.strip() for t in os.environ["TICKERS"].split(",")]
     tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     tg_chat  = os.environ.get("TELEGRAM_CHAT_ID", "")
+    fmp_key  = os.environ["FMP_API_KEY"]
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    logger.info(f"Fetching {len(tickers)} tickers for {run_date}, {DELAY_SECONDS}s apart")
+    logger.info(f"Fetching {len(tickers)} tickers via FMP for {run_date}")
 
-    records = []
-    for idx, symbol in enumerate(tickers):
-        records.append(fetch_ticker(symbol))
-        if idx < len(tickers) - 1:
-            time.sleep(DELAY_SECONDS)
+    records = fetch_all_tickers(tickers, fmp_key)
 
     from collections import defaultdict
     sector_pes = defaultdict(list)

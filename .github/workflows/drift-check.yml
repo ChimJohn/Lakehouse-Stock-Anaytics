@@ -30,14 +30,15 @@ jobs:
       - name: Terraform Init
         run: terraform init
         env:
-          TF_VAR_databricks_host:  ${{ secrets.DATABRICKS_HOST }}
-          TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
-          TF_VAR_s3_bucket_prefix: ${{ vars.S3_BUCKET_PREFIX }}
-          TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
-          TF_VAR_aws_access_key:   ${{ secrets.TF_VAR_aws_access_key }}
-          TF_VAR_aws_secret_key:   ${{ secrets.TF_VAR_aws_secret_key }}
+          TF_VAR_databricks_host:    ${{ secrets.DATABRICKS_HOST }}
+          TF_VAR_databricks_token:   ${{ secrets.DATABRICKS_TOKEN }}
+          TF_VAR_s3_bucket_prefix:   ${{ vars.S3_BUCKET_PREFIX }}
+          TF_VAR_aws_region:         ${{ vars.TF_VAR_AWS_REGION }}
+          TF_VAR_aws_access_key:     ${{ secrets.TF_VAR_aws_access_key }}
+          TF_VAR_aws_secret_key:     ${{ secrets.TF_VAR_aws_secret_key }}
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TF_VAR_telegram_chat_id:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TF_VAR_fmp_api_key:        ${{ secrets.FMP_API_KEY }}
 
       - name: Terraform Plan (detect drift)
         id: drift
@@ -45,14 +46,15 @@ jobs:
           terraform plan -detailed-exitcode -no-color 2>&1 | tee plan_output.txt
           echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
         env:
-          TF_VAR_databricks_host:  ${{ secrets.DATABRICKS_HOST }}
-          TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
-          TF_VAR_s3_bucket_prefix: ${{ vars.S3_BUCKET_PREFIX }}
-          TF_VAR_aws_region:       ${{ vars.TF_VAR_AWS_REGION }}
-          TF_VAR_aws_access_key:   ${{ secrets.TF_VAR_aws_access_key }}
-          TF_VAR_aws_secret_key:   ${{ secrets.TF_VAR_aws_secret_key }}
+          TF_VAR_databricks_host:    ${{ secrets.DATABRICKS_HOST }}
+          TF_VAR_databricks_token:   ${{ secrets.DATABRICKS_TOKEN }}
+          TF_VAR_s3_bucket_prefix:   ${{ vars.S3_BUCKET_PREFIX }}
+          TF_VAR_aws_region:         ${{ vars.TF_VAR_AWS_REGION }}
+          TF_VAR_aws_access_key:     ${{ secrets.TF_VAR_aws_access_key }}
+          TF_VAR_aws_secret_key:     ${{ secrets.TF_VAR_aws_secret_key }}
           TF_VAR_telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TF_VAR_telegram_chat_id:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          TF_VAR_fmp_api_key:        ${{ secrets.FMP_API_KEY }}
         continue-on-error: true
 
       - name: Fail if drift detected

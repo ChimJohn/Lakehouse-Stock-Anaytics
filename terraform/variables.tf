@@ -66,3 +66,9 @@ variable "telegram_chat_id" {
   description = "Telegram chat ID to send reports to"
   type        = string
 }
+
+variable "fmp_api_key" {
+  description = "Financial Modeling Prep API key"
+  type        = string
+  sensitive   = true
+}

@@ -46,14 +46,14 @@ resource "aws_lambda_function" "stock_ingest" {
   role          = aws_iam_role.lambda_exec.arn
   handler       = "lambda_function.handler"
   runtime       = "python3.11"
-  timeout       = 300   # 5 min for 88 tickers with batching
+  timeout       = 300
   memory_size   = 256
 
   filename         = "${path.module}/../../../ingestion/placeholder.zip"
   source_code_hash = filebase64sha256("${path.module}/../../../ingestion/placeholder.zip")
 
   lifecycle {
-    ignore_changes = [filename, source_code_hash]
+    ignore_changes = [filename, source_code_hash, timeout]
   }
 
   environment {
@@ -62,6 +62,7 @@ resource "aws_lambda_function" "stock_ingest" {
       TICKERS             = join(",", var.tickers)
       TELEGRAM_BOT_TOKEN  = var.telegram_bot_token
       TELEGRAM_CHAT_ID    = var.telegram_chat_id
+      FMP_API_KEY         = var.fmp_api_key
     }
   }
 

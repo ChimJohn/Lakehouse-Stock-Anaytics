@@ -37,13 +37,14 @@ module "lambda" {
   tfstate_bucket      = "${var.s3_bucket_prefix}-tfstate"
   telegram_bot_token  = var.telegram_bot_token
   telegram_chat_id    = var.telegram_chat_id
+  fmp_api_key         = var.fmp_api_key
 }
 
 module "eventbridge" {
   source               = "./modules/eventbridge"
   lambda_function_arn  = module.lambda.function_arn
   lambda_function_name = module.lambda.function_name
-  schedule_expression  = "cron(15 8 ? * MON-FRI *)"  # 4:15 AM ET / 4:15 PM SGT Monday - Friday
+  schedule_expression  = "cron(15 8 ? * MON-FRI *)"
 }
 
 module "databricks" {

@@ -1,14 +1,9 @@
 """
 Stock ingestion Lambda
-Pulls P/E, Forward P/E, PEG, price, and sector data from yfinance,
-writes a daily JSON snapshot to S3 raw layer,
-and sends a valuation report to Telegram.
+Fetches stock data from Yahoo Finance directly via requests,
+computes valuation scores, writes to S3, and sends Telegram report.
 
-Environment variables:
-  RAW_BUCKET          - S3 bucket name for raw layer
-  TICKERS             - comma-separated list of ticker symbols
-  TELEGRAM_BOT_TOKEN  - Telegram bot token
-  TELEGRAM_CHAT_ID    - Telegram chat ID
+Uses a long per-ticker delay to avoid AWS IP-range rate limiting from Yahoo.
 """
 
 import json
@@ -16,63 +11,91 @@ import os
 import logging
 import time
 from datetime import datetime, timezone
+import urllib.request
 
 import boto3
-import yfinance as yf
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 s3 = boto3.client("s3")
 
-FIELDS = [
-    "symbol", "shortName", "sector", "industry",
-    "currentPrice", "marketCap",
-    "trailingPE", "forwardPE", "pegRatio",
-    "trailingEps", "forwardEps", "priceToBook",
-    "dividendYield", "fiftyTwoWeekHigh", "fiftyTwoWeekLow",
-    "currency",
-]
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+DELAY_SECONDS = 15  # per-ticker delay to avoid IP-range rate limiting
 
 
 def fetch_ticker(symbol: str) -> dict:
+    url = (
+        f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
+        f"?modules=summaryDetail%2CdefaultKeyStatistics%2CassetProfile%2CfinancialData%2CpriceInfo"
+    )
     try:
-        info = yf.Ticker(symbol).info
-        record = {"symbol": symbol, "fetched_at": datetime.now(timezone.utc).isoformat()}
-        for field in FIELDS:
-            record[field] = info.get(field)
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        result = data.get("quoteSummary", {}).get("result", [])
+        if not result:
+            raise ValueError("Empty result")
+
+        r = result[0]
+        summary   = r.get("summaryDetail", {})
+        key_stats = r.get("defaultKeyStatistics", {})
+        profile   = r.get("assetProfile", {})
+        fin_data  = r.get("financialData", {})
+
+        def val(d, k):
+            v = d.get(k)
+            if isinstance(v, dict):
+                return v.get("raw")
+            return v
+
+        record = {
+            "symbol":           symbol,
+            "shortName":        val(r.get("price", {}), "shortName") or symbol,
+            "sector":           profile.get("sector"),
+            "industry":         profile.get("industry"),
+            "currentPrice":     val(fin_data, "currentPrice") or val(summary, "regularMarketPrice"),
+            "marketCap":        val(summary, "marketCap"),
+            "trailingPE":       val(summary, "trailingPE"),
+            "forwardPE":        val(summary, "forwardPE"),
+            "pegRatio":         val(key_stats, "pegRatio"),
+            "trailingEps":      val(key_stats, "trailingEps"),
+            "forwardEps":       val(key_stats, "forwardEps"),
+            "priceToBook":      val(key_stats, "priceToBook"),
+            "dividendYield":    val(summary, "dividendYield"),
+            "fiftyTwoWeekHigh": val(summary, "fiftyTwoWeekHigh"),
+            "fiftyTwoWeekLow":  val(summary, "fiftyTwoWeekLow"),
+            "currency":         val(summary, "currency"),
+            "fetched_at":       datetime.now(timezone.utc).isoformat(),
+        }
         return record
+
     except Exception as e:
         logger.error(f"Failed to fetch {symbol}: {e}")
         return {"symbol": symbol, "error": str(e), "fetched_at": datetime.now(timezone.utc).isoformat()}
 
 
 def score_ticker(record: dict, sector_medians: dict) -> dict:
-    """Compute valuation score for a single ticker."""
-    sector = record.get("sector")
+    sector    = record.get("sector")
     median_pe = sector_medians.get(sector)
 
-    # P/E score
     trailing_pe = record.get("trailingPE")
     if median_pe and trailing_pe and trailing_pe > 0:
-        pe_ratio = median_pe / trailing_pe
-        pe_score = max(0.0, min(1.0, pe_ratio))
+        pe_score = max(0.0, min(1.0, median_pe / trailing_pe))
     else:
         pe_score = 0.5
 
-    # Forward P/E score
     fwd_pe = record.get("forwardPE")
-    if fwd_pe is not None:
-        fwd_pe_score = max(0.0, min(1.0, (50.0 - fwd_pe) / 45.0))
-    else:
-        fwd_pe_score = 0.5
+    fwd_pe_score = max(0.0, min(1.0, (50.0 - fwd_pe) / 45.0)) if fwd_pe is not None else 0.5
 
-    # PEG score
     peg = record.get("pegRatio")
-    if peg is not None:
-        peg_score = max(0.0, min(1.0, (3.0 - peg) / 2.0))
-    else:
-        peg_score = 0.5
+    peg_score = max(0.0, min(1.0, (3.0 - peg) / 2.0)) if peg is not None else 0.5
 
     valuation_score = round((pe_score * 0.35 + fwd_pe_score * 0.35 + peg_score * 0.30) * 100, 1)
 
@@ -87,15 +110,14 @@ def score_ticker(record: dict, sector_medians: dict) -> dict:
 
 
 def send_telegram(token: str, chat_id: str, message: str):
-    """Send a message to Telegram."""
-    import urllib.request
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = json.dumps({
         "chat_id": chat_id,
         "text": message,
         "parse_mode": "HTML"
     }).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=payload,
+                                  headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=10)
         logger.info("Telegram message sent")
@@ -104,38 +126,38 @@ def send_telegram(token: str, chat_id: str, message: str):
 
 
 def format_telegram_message(scored: list, run_date: str) -> str:
-    undervalued = [r for r in scored if r["valuation_band"] == "undervalued"]
-    fair_value  = [r for r in scored if r["valuation_band"] == "fair_value"]
-    overvalued  = [r for r in scored if r["valuation_band"] == "overvalued"]
+    undervalued = sorted([r for r in scored if r["valuation_band"] == "undervalued"],
+                         key=lambda x: -x["valuation_score"])
+    fair_value  = sorted([r for r in scored if r["valuation_band"] == "fair_value"],
+                         key=lambda x: -x["valuation_score"])
+    overvalued  = sorted([r for r in scored if r["valuation_band"] == "overvalued"],
+                         key=lambda x: -x["valuation_score"])
 
     def fmt_row(r):
         pe  = f"{r['trailingPE']:.1f}" if r.get("trailingPE") else "N/A"
         fpe = f"{r['forwardPE']:.1f}"  if r.get("forwardPE")  else "N/A"
         peg = f"{r['pegRatio']:.2f}"   if r.get("pegRatio")   else "N/A"
-        return (f"  <b>{r['symbol']:<6}</b> Score: {r['valuation_score']:>5} | "
-                f"P/E: {pe:>6} | Fwd P/E: {fpe:>6} | PEG: {peg:>5}")
+        return (f"  <b>{r['symbol']:<6}</b> Score:{r['valuation_score']:>5} | "
+                f"P/E:{pe:>6} | Fwd:{fpe:>6} | PEG:{peg:>5}")
 
-    lines = [f"📈 <b>Stock Valuation Report — {run_date}</b>\n"]
+    lines = [f"📈 <b>Stock Valuation — {run_date}</b>\n"]
 
     if undervalued:
         lines.append(f"🟢 <b>UNDERVALUED ({len(undervalued)})</b>")
-        for r in sorted(undervalued, key=lambda x: -x["valuation_score"]):
-            lines.append(fmt_row(r))
+        lines.extend(fmt_row(r) for r in undervalued)
         lines.append("")
 
     if fair_value:
         lines.append(f"🟡 <b>FAIR VALUE ({len(fair_value)})</b>")
-        for r in sorted(fair_value, key=lambda x: -x["valuation_score"]):
-            lines.append(fmt_row(r))
+        lines.extend(fmt_row(r) for r in fair_value)
         lines.append("")
 
     if overvalued:
         lines.append(f"🔴 <b>OVERVALUED ({len(overvalued)})</b>")
-        for r in sorted(overvalued, key=lambda x: -x["valuation_score"]):
-            lines.append(fmt_row(r))
+        lines.extend(fmt_row(r) for r in overvalued)
         lines.append("")
 
-    lines.append(f"<i>Fetched {len(scored)} tickers · {run_date} 04:15 ET</i>")
+    lines.append(f"<i>{len(scored)} tickers · {run_date} 04:15 ET</i>")
     return "\n".join(lines)
 
 
@@ -146,18 +168,14 @@ def handler(event, context):
     tg_chat  = os.environ.get("TELEGRAM_CHAT_ID", "")
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    logger.info(f"Fetching {len(tickers)} tickers for {run_date}")
+    logger.info(f"Fetching {len(tickers)} tickers for {run_date}, {DELAY_SECONDS}s apart")
 
-    # Fetch in batches of 10 with a short delay to avoid rate limiting
     records = []
-    for i in range(0, len(tickers), 10):
-        batch = tickers[i:i+10]
-        for symbol in batch:
-            records.append(fetch_ticker(symbol))
-        if i + 10 < len(tickers):
-            time.sleep(5)
+    for idx, symbol in enumerate(tickers):
+        records.append(fetch_ticker(symbol))
+        if idx < len(tickers) - 1:
+            time.sleep(DELAY_SECONDS)
 
-    # Compute sector medians for scoring
     from collections import defaultdict
     sector_pes = defaultdict(list)
     for r in records:
@@ -168,31 +186,25 @@ def handler(event, context):
         for sector, vals in sector_pes.items()
     }
 
-    # Score all tickers
     success = [r for r in records if "error" not in r]
     scored  = [score_ticker(r, sector_medians) for r in success]
 
-    # Write raw NDJSON to S3
     key  = f"stocks/date={run_date}/snapshot.json"
     body = "\n".join(json.dumps(r) for r in records)
     s3.put_object(Bucket=bucket, Key=key, Body=body.encode("utf-8"),
                   ContentType="application/x-ndjson")
     logger.info(f"Wrote {len(success)}/{len(records)} records to s3://{bucket}/{key}")
 
-    # Send Telegram report
     if tg_token and tg_chat and scored:
-        # Telegram has a 4096 char limit per message — split if needed
         message = format_telegram_message(scored, run_date)
         if len(message) <= 4096:
             send_telegram(tg_token, tg_chat, message)
         else:
-            # Split into undervalued + fair/overvalued
-            uv = [r for r in scored if r["valuation_band"] == "undervalued"]
-            rest = [r for r in scored if r["valuation_band"] != "undervalued"]
+            half = len(scored) // 2
             send_telegram(tg_token, tg_chat,
-                format_telegram_message(uv + rest[:20], run_date + " (1/2)"))
+                format_telegram_message(scored[:half], run_date + " (1/2)"))
             send_telegram(tg_token, tg_chat,
-                format_telegram_message(rest[20:], run_date + " (2/2)"))
+                format_telegram_message(scored[half:], run_date + " (2/2)"))
 
     return {
         "statusCode": 200,

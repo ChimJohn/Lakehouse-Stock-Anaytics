@@ -31,3 +31,8 @@ variable "telegram_bot_token" {
 variable "telegram_chat_id" {
   type = string
 }
+
+variable "fmp_api_key" {
+  type      = string
+  sensitive = true
+}

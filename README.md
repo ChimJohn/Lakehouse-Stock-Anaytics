@@ -1,13 +1,13 @@
-# Lakehouse Stock Analytics Platform
+# 📈 Lakehouse Stock Analytics Platform
 
-A personal investing dashboard backed by a fully IaC-provisioned data lakehouse. Stock data flows daily from Yahoo Finance → AWS Lambda → S3 → Databricks, with valuation scores pushed to Telegram every weekday at pre-market open. All infrastructure is managed by Terraform and deployed via GitHub Actions CI/CD.
+A personal investing dashboard backed by a fully IaC-provisioned data lakehouse. Stock data flows every weekday from Financial Modeling Prep → AWS Lambda → S3 → Databricks, with valuation scores pushed to Telegram 15 minutes after US pre-market opens. All infrastructure is managed by Terraform and deployed via GitHub Actions CI/CD.
 
 ---
 
 ## Architecture
 
 ```
-Yahoo Finance (yfinance)
+Financial Modeling Prep API
         │
         ▼
 AWS Lambda                    ← triggered Mon–Fri at 4:15 AM ET (4:15 PM SGT)
@@ -42,22 +42,22 @@ Databricks (03_dashboard)     ← valuation heatmap, sector breakdown
 Every weekday at 4:15 PM SGT, a formatted valuation report is sent to a Telegram channel:
 
 ```
-📈 Stock Valuation Report — 2026-08-27
+📈 Stock Valuation — 2026-09-11
 
-🟢 UNDERVALUED (3)
-  JPM    Score:  74 | P/E:  12.4 | Fwd P/E:  11.8 | PEG:  0.9
-  AAPL   Score:  71 | P/E:  28.1 | Fwd P/E:  24.3 | PEG:  1.2
-  XOM    Score:  70 | P/E:  14.2 | Fwd P/E:  12.9 | PEG:  1.1
-
-🟡 FAIR VALUE (61)
-  MSFT   Score:  58 | P/E:  34.2 | Fwd P/E:  29.1 | PEG:  2.1
+🟢 UNDERVALUED (17)
+  JPM    Score: 94.3 | P/E:  15.2 | PEG: 0.80
+  GS     Score: 94.1 | P/E:  15.5 | PEG: 0.36
+  GOOGL  Score: 93.7 | P/E:  16.4 | PEG: 0.15
   ...
 
-🔴 OVERVALUED (23)
-  TSLA   Score:  31 | P/E:  89.4 | Fwd P/E:  74.2 | PEG:  4.1
+🟡 FAIR VALUE (8)
+  AAPL   Score: 68.7 | P/E:  37.3 | PEG: 1.14
   ...
 
-Fetched 87 tickers · 2026-08-27 04:15 ET
+🔴 OVERVALUED (1)
+  AMD    Score: 39.4 | P/E: 127.8 | PEG: 1.03
+
+21 tickers · 2026-09-11 04:15 ET
 ```
 
 ---
@@ -68,8 +68,8 @@ Each stock receives a composite score (0–100) across three metrics:
 
 | Metric | Weight | Logic |
 |---|---|---|
-| P/E vs sector median | 35% | Below sector median → higher score |
-| Forward P/E | 35% | Lower forward P/E → higher score |
+| P/E vs sector median | 45% | Below sector median → higher score |
+| Forward P/E (fallback: trailing P/E) | 25% | Lower P/E → higher score |
 | PEG ratio | 30% | PEG < 1 undervalued, PEG > 3 overvalued |
 
 **Score bands:**
@@ -77,20 +77,21 @@ Each stock receives a composite score (0–100) across three metrics:
 - 🟡 40–69: Fair value
 - 🔴 0–39: Overvalued
 
+**Data quality guards:**
+- Negative or absurd PEG ratios (e.g. from negative earnings growth) are discarded and treated as neutral rather than skewing the score
+- Negative trailing P/E (negative earnings) is never treated as a "cheap" signal — it falls back to a neutral score component instead
+
 ---
 
-## Tracked Universe (~88 blue chip stocks)
+## Tracked Universe (21 tickers)
 
 | Sector | Tickers |
 |---|---|
-| Technology | AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AVGO, ORCL, CRM, ADBE, AMD, INTC, QCOM, TXN, IBM, CSCO, NOW, INTU, AMAT |
-| Financials | JPM, BAC, WFC, GS, MS, BLK, AXP, V, MA, C, USB, PNC, SCHW, COF, CB |
-| Healthcare | JNJ, UNH, LLY, PFE, ABBV, MRK, TMO, ABT, DHR, BMY, AMGN, GILD, CVS, MDT |
-| Consumer | PG, KO, PEP, WMT, COST, MCD, NKE, SBUX, TGT, HD, LOW, DIS, CMCSA, VZ, T |
-| Energy | XOM, CVX, COP, SLB, EOG, PSX, MPC, OXY |
-| Industrials | CAT, HON, UPS, BA, GE, MMM, RTX, LMT, DE, ETN |
-| Materials & Real Estate | LIN, APD, SHW, AMT, PLD, EQIX |
-| International ADRs | TSM, ASML, SAP, TM, NVO, SHEL, BP, BHP, SE |
+| Technology | AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, ORCL, AMD, QCOM, INTC |
+| Financials | JPM, GS, BLK, V, MA |
+| Healthcare | JNJ, UNH |
+| Energy | SMR |
+| International ADRs | TSM, ASML |
 
 ---
 
@@ -114,12 +115,12 @@ Each stock receives a composite score (0–100) across three metrics:
 | Service | Usage | Cost |
 |---|---|---|
 | Databricks Free Edition | Serverless compute | $0 forever |
-| AWS S3 | ~5 MB/day of stock data | $0 (5 GB free tier) |
+| AWS S3 | ~2 MB/day of stock data | $0 (5 GB free tier) |
 | AWS Lambda | 1 invocation/weekday | $0 (1M/month free tier) |
 | AWS EventBridge | 1 scheduled rule | $0 |
 | AWS CloudWatch Logs | Lambda logs | $0 (5 GB free tier) |
 | GitHub Actions | CI/CD pipeline | $0 (2,000 min/month free) |
-| yfinance | Stock data | $0, no API key required |
+| Financial Modeling Prep | ~63 calls/day (3 per ticker × 21) | $0 (250 calls/day free tier) |
 | Telegram Bot API | Valuation alerts | $0 |
 | Terraform | IaC | $0, open source |
 
@@ -160,8 +161,8 @@ Daily 06:00   →  drift-check.yml detects infra divergence from Terraform state
 │   └── schemas/
 │       └── gold_schema.sql            # Delta table schema reference
 ├── ingestion/
-│   ├── lambda_function.py             # yfinance → S3 + Telegram
-│   └── requirements.txt
+│   ├── lambda_function.py             # FMP API → S3 + Telegram
+│   └── placeholder.zip                # Bootstrap placeholder for Terraform
 └── .github/workflows/
     ├── terraform-plan.yml             # PR: plan + comment
     ├── terraform-apply.yml            # Merge: apply
@@ -175,15 +176,14 @@ Daily 06:00   →  drift-check.yml detects infra divergence from Terraform state
 ### Prerequisites
 - AWS account (free tier)
 - Databricks Free Edition account → [sign up](https://www.databricks.com/learn/free-edition)
+- Financial Modeling Prep API key → [sign up](https://financialmodelingprep.com/developer/docs)
 - Telegram bot → create via [@BotFather](https://t.me/BotFather)
 - Terraform >= 1.0
 - AWS CLI
-- Docker Desktop (for building the Lambda package)
 
 ### 1. Bootstrap (one-time manual steps)
 
 ```bash
-# Clone the repo
 git clone https://github.com/<your-username>/lakehouse-stock-analytics
 cd lakehouse-stock-analytics
 
@@ -202,32 +202,26 @@ aws s3api create-bucket \
 2. Note your workspace URL (e.g. `https://<id>.cloud.databricks.com`)
 3. Generate a Personal Access Token: **Settings → Developer → Access Tokens**
 
-### 3. Create a Telegram bot
+### 3. Get a Financial Modeling Prep API key
+
+1. Sign up at [financialmodelingprep.com/developer/docs](https://financialmodelingprep.com/developer/docs)
+2. Copy your API key from the dashboard
+3. Free tier gives 250 requests/day — this project uses ~63/day (21 tickers × 3 calls)
+
+### 4. Create a Telegram bot
 
 1. Message [@BotFather](https://t.me/BotFather) on Telegram
 2. Send `/newbot` and follow the prompts
-3. Copy the bot token (e.g. `7123456789:AAF...`)
+3. Copy the bot token
 4. Add your bot to a group or channel and get the chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates`
 
-### 4. Build the Lambda package
+### 5. Build and deploy the Lambda package
 
 ```bash
-# Requires Docker Desktop running
-rm -rf ingestion/package
 mkdir -p ingestion/package
-
-docker run --rm \
-  --platform linux/amd64 \
-  -v "$(pwd)/ingestion":/var/task \
-  amazonlinux:2023 \
-  bash -c "dnf install -y python3.11 python3.11-pip && \
-           pip3.11 install yfinance==0.2.54 'numpy==1.26.4' 'pandas==2.1.4' \
-           -t /var/task/package/ && echo SUCCESS"
-
 cp ingestion/lambda_function.py ingestion/package/
 cd ingestion/package && zip -r ../lambda_package.zip . && cd ../..
 
-# Upload to S3 and deploy
 aws s3 cp ingestion/lambda_package.zip s3://<your-prefix>-tfstate/lambda_package.zip
 aws lambda update-function-code \
   --function-name <your-prefix>-stock-ingest \
@@ -236,7 +230,9 @@ aws lambda update-function-code \
   --region ap-southeast-1 --no-cli-pager
 ```
 
-### 5. Configure GitHub secrets and variables
+> The Lambda has no external dependencies — it uses only Python's built-in `urllib` and the AWS-provided `boto3`, so no dependency bundling is needed.
+
+### 6. Configure GitHub secrets and variables
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
@@ -250,6 +246,7 @@ aws lambda update-function-code \
 | `TF_VAR_aws_secret_key` | Same as AWS_SECRET_ACCESS_KEY |
 | `TELEGRAM_BOT_TOKEN` | Your Telegram bot token |
 | `TELEGRAM_CHAT_ID` | Your Telegram chat/group ID |
+| `FMP_API_KEY` | Your Financial Modeling Prep API key |
 
 **Variables** (same page → Variables tab):
 
@@ -258,7 +255,7 @@ aws lambda update-function-code \
 | `TF_VAR_AWS_REGION` | `ap-southeast-1` |
 | `S3_BUCKET_PREFIX` | Your chosen prefix (e.g. `nicky-lakehouse`) |
 
-### 6. Deploy
+### 7. Deploy
 
 ```bash
 git push origin main  # triggers terraform apply via GitHub Actions
@@ -287,20 +284,31 @@ GitHub → Actions → Drift Detection → Run workflow
 
 ## Key Design Decisions
 
-**Why boto3 instead of Spark s3a for S3 access?**
-Databricks Free Edition serverless doesn't allow setting `spark.conf` properties for S3 credentials. Using `boto3` with explicit credentials bypasses this restriction entirely.
+**Why Financial Modeling Prep instead of yfinance?**
+Initial builds used `yfinance`, which scrapes Yahoo Finance directly. AWS Lambda's IP range in `ap-southeast-1` is blanket-blocked by Yahoo (returns HTTP 429 on every request, regardless of delay between calls) because too many AWS customers run scrapers from the same shared IP pool. Financial Modeling Prep is a proper API service with an API key, avoiding this entirely — 250 free requests/day comfortably covers 21 tickers × 3 endpoint calls each.
 
-**Why is the Lambda package built with Docker?**
-The Lambda runtime runs on Amazon Linux x86_64. Building on an M-series Mac produces ARM binaries that crash on Lambda. Docker with `--platform linux/amd64` cross-compiles correctly using Rosetta 2.
+**Why 3 API calls per ticker?**
+FMP's `/stable/quote` endpoint dropped the `pe` field in its newer API version — it only returns price, volume, and market cap. P/E and PEG must be pulled from the separate `/stable/ratios-ttm` endpoint, and sector comes from `/stable/profile`. This is a real constraint of the current free-tier API surface, not a design choice.
+
+**Why is the Lambda package dependency-free?**
+Switching to FMP's REST API means no more `yfinance`, `numpy`, or `pandas` — the whole Lambda is under 3.5 KB, built with only `urllib` and `boto3` (already available in the Lambda runtime). This eliminates the entire cross-compilation headache of building Linux-compatible binaries on an Apple Silicon Mac.
 
 **Why is the Databricks workspace created manually?**
 Databricks Free Edition doesn't expose account-level APIs, so Terraform can't provision the workspace itself. This mirrors real enterprise setups where workspace provisioning is a separate bootstrap step.
 
 **Why is `lifecycle { ignore_changes }` on the Lambda function?**
-The Lambda package is too large to store in git and is deployed separately via `aws lambda update-function-code`. The `ignore_changes` block prevents Terraform from overwriting it on each apply.
+The Lambda package is deployed separately via `aws lambda update-function-code` rather than through Terraform, so `ignore_changes` prevents Terraform from overwriting manual deploys on each apply.
 
 **Why weekdays only?**
 US markets are closed on weekends, so pre-market data wouldn't change. The EventBridge cron `cron(15 8 ? * MON-FRI *)` skips Saturday and Sunday automatically.
+
+---
+
+## Known Limitations
+
+- **No forward P/E**: FMP's free tier doesn't expose forward-looking analyst estimates, so the model falls back to trailing P/E for that scoring component
+- **PEG data gaps**: Some tickers (e.g. DIS, UNH, JNJ, META in early runs) don't return a PEG ratio from FMP's free tier — these are scored as neutral (0.5) on that component rather than penalized
+- **21-ticker universe**: Deliberately small to stay well within FMP's 250 calls/day free quota with room for manual testing
 
 ---
 
@@ -310,4 +318,4 @@ US markets are closed on weekends, so pre-market data wouldn't change. The Event
 - IAM roles follow least-privilege: Lambda can only write to the raw S3 bucket
 - S3 buckets have public access blocked
 - Terraform state is encrypted at rest in S3
-- Telegram bot token is stored as a GitHub secret and passed to Lambda as an environment variable
+- API keys (Telegram, FMP) are stored as GitHub secrets and passed to Lambda as environment variables

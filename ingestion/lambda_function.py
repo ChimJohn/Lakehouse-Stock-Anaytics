@@ -93,12 +93,13 @@ def score_ticker(record: dict, sector_medians: dict) -> dict:
     median_pe = sector_medians.get(sector)
 
     trailing_pe = record.get("trailingPE")
+    # Negative P/E means negative earnings — not a "cheap" signal, treat as neutral
     if median_pe and trailing_pe and trailing_pe > 0:
         pe_score = max(0.0, min(1.0, median_pe / trailing_pe))
     else:
         pe_score = 0.5
 
-    fwd_pe = record.get("forwardPE") or record.get("trailingPE")
+    fwd_pe = record.get("forwardPE") or (record.get("trailingPE") if record.get("trailingPE", 0) > 0 else None)
     fwd_pe_score = max(0.0, min(1.0, (50.0 - fwd_pe) / 45.0)) if fwd_pe is not None else 0.5
 
     peg = record.get("pegRatio")
@@ -141,7 +142,8 @@ def format_telegram_message(scored: list, run_date: str) -> str:
                          key=lambda x: -x["valuation_score"])
 
     def fmt_row(r):
-        pe  = f"{r['trailingPE']:.1f}" if r.get("trailingPE") else "N/A"
+        tpe = r.get("trailingPE")
+        pe  = f"{tpe:.1f}" if tpe is not None and tpe > 0 else ("neg" if tpe is not None else "N/A")
         peg = f"{r['pegRatio']:.2f}"   if r.get("pegRatio")   else "N/A"
         return (f"  <b>{r['symbol']:<6}</b> Score:{r['valuation_score']:>5} | "
                 f"P/E:{pe:>6} | PEG:{peg:>5}")

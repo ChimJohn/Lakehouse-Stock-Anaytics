@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone
 import urllib.request
 import urllib.parse
+import urllib.error
 
 import boto3
 
@@ -26,12 +27,25 @@ s3 = boto3.client("s3")
 FMP_BASE = "https://financialmodelingprep.com/stable"
 
 
-def fmp_get(path: str, symbol: str, api_key: str) -> list:
+def fmp_get(path: str, symbol: str, api_key: str, retries: int = 2) -> list:
     params = urllib.parse.urlencode({"symbol": symbol, "apikey": api_key})
     url = f"{FMP_BASE}/{path}?{params}"
     req = urllib.request.Request(url, headers={"User-Agent": "lakehouse-stock-analytics/1.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            last_error = e
+            if e.code == 402 and attempt < retries:
+                # Some FMP free-tier 402s are transient per-symbol — retry once
+                logger.info(f"402 on {path}/{symbol}, retrying ({attempt + 1}/{retries})")
+                time.sleep(2)
+                continue
+            raise
+    raise last_error
 
 
 def fetch_ticker(symbol: str, api_key: str) -> dict:

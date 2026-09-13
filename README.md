@@ -42,22 +42,23 @@ Databricks (03_dashboard)     ← valuation heatmap, sector breakdown
 Every weekday at 4:15 PM SGT, a formatted valuation report is sent to a Telegram channel:
 
 ```
-📈 Stock Valuation — 2026-09-11
+📈 Stock Valuation — 2026-09-13
 
-🟢 UNDERVALUED (17)
-  JPM    Score: 94.3 | P/E:  15.2 | PEG: 0.80
-  GS     Score: 94.1 | P/E:  15.5 | PEG: 0.36
-  GOOGL  Score: 93.7 | P/E:  16.4 | PEG: 0.15
+🟢 UNDERVALUED (10)
+  JPM    Score: 94.3 | P/E:  15.3 | PEG: 0.80
+  GS     Score: 94.1 | P/E:  15.7 | PEG: 0.37
+  GOOGL  Score: 93.5 | P/E:  16.7 | PEG: 0.15
   ...
 
-🟡 FAIR VALUE (8)
-  AAPL   Score: 68.7 | P/E:  37.3 | PEG: 1.14
+🟡 FAIR VALUE (4)
+  AAPL   Score: 67.5 | P/E:  37.9 | PEG: 1.16
+  INTC   Score: 65.0 | P/E:   neg | PEG: 0.00
   ...
 
 🔴 OVERVALUED (1)
-  AMD    Score: 39.4 | P/E: 127.8 | PEG: 1.03
+  AMD    Score: 38.7 | P/E: 131.0 | PEG: 1.06
 
-21 tickers · 2026-09-11 04:15 ET
+16 tickers · 2026-09-13 04:15 ET
 ```
 
 ---
@@ -79,19 +80,22 @@ Each stock receives a composite score (0–100) across three metrics:
 
 **Data quality guards:**
 - Negative or absurd PEG ratios (e.g. from negative earnings growth) are discarded and treated as neutral rather than skewing the score
-- Negative trailing P/E (negative earnings) is never treated as a "cheap" signal — it falls back to a neutral score component instead
+- Negative trailing P/E (negative earnings) is displayed as "neg" and never treated as a "cheap" signal — it falls back to a neutral score component instead
+- Transient FMP `402` errors are retried once before being treated as a genuine failure
 
 ---
 
-## Tracked Universe (21 tickers)
+## Tracked Universe (16 tickers)
 
 | Sector | Tickers |
 |---|---|
-| Technology | AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, ORCL, AMD, QCOM, INTC |
-| Financials | JPM, GS, BLK, V, MA |
+| Technology | AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, INTC |
+| Financials | JPM, GS, V |
 | Healthcare | JNJ, UNH |
-| Energy | SMR |
-| International ADRs | TSM, ASML |
+| Energy | CVX |
+| International ADRs | TSM |
+
+> Five tickers (ORCL, QCOM, BLK, MA, ASML) were dropped after consistently returning `HTTP 402 Payment Required` on FMP's free-tier `/stable/quote` endpoint — confirmed as a permanent per-symbol restriction, not a rate-limit or transient issue, after retry logic still failed on every attempt across multiple days.
 
 ---
 
@@ -115,12 +119,12 @@ Each stock receives a composite score (0–100) across three metrics:
 | Service | Usage | Cost |
 |---|---|---|
 | Databricks Free Edition | Serverless compute | $0 forever |
-| AWS S3 | ~2 MB/day of stock data | $0 (5 GB free tier) |
+| AWS S3 | ~1.5 MB/day of stock data | $0 (5 GB free tier) |
 | AWS Lambda | 1 invocation/weekday | $0 (1M/month free tier) |
 | AWS EventBridge | 1 scheduled rule | $0 |
 | AWS CloudWatch Logs | Lambda logs | $0 (5 GB free tier) |
 | GitHub Actions | CI/CD pipeline | $0 (2,000 min/month free) |
-| Financial Modeling Prep | ~63 calls/day (3 per ticker × 21) | $0 (250 calls/day free tier) |
+| Financial Modeling Prep | ~48 calls/day (3 per ticker × 16) | $0 (250 calls/day free tier) |
 | Telegram Bot API | Valuation alerts | $0 |
 | Terraform | IaC | $0, open source |
 
@@ -206,7 +210,8 @@ aws s3api create-bucket \
 
 1. Sign up at [financialmodelingprep.com/developer/docs](https://financialmodelingprep.com/developer/docs)
 2. Copy your API key from the dashboard
-3. Free tier gives 250 requests/day — this project uses ~63/day (21 tickers × 3 calls)
+3. Free tier gives 250 requests/day — this project uses ~48/day (16 tickers × 3 calls)
+4. Note: some individual symbols return `402 Payment Required` on the free tier regardless of quota remaining — this appears to be a permanent per-symbol restriction on certain stocks (see Tracked Universe above)
 
 ### 4. Create a Telegram bot
 
@@ -285,10 +290,13 @@ GitHub → Actions → Drift Detection → Run workflow
 ## Key Design Decisions
 
 **Why Financial Modeling Prep instead of yfinance?**
-Initial builds used `yfinance`, which scrapes Yahoo Finance directly. AWS Lambda's IP range in `ap-southeast-1` is blanket-blocked by Yahoo (returns HTTP 429 on every request, regardless of delay between calls) because too many AWS customers run scrapers from the same shared IP pool. Financial Modeling Prep is a proper API service with an API key, avoiding this entirely — 250 free requests/day comfortably covers 21 tickers × 3 endpoint calls each.
+Initial builds used `yfinance`, which scrapes Yahoo Finance directly. AWS Lambda's IP range in `ap-southeast-1` is blanket-blocked by Yahoo (returns HTTP 429 on every request, regardless of delay between calls) because too many AWS customers run scrapers from the same shared IP pool. Financial Modeling Prep is a proper API service with an API key, avoiding this entirely.
 
 **Why 3 API calls per ticker?**
 FMP's `/stable/quote` endpoint dropped the `pe` field in its newer API version — it only returns price, volume, and market cap. P/E and PEG must be pulled from the separate `/stable/ratios-ttm` endpoint, and sector comes from `/stable/profile`. This is a real constraint of the current free-tier API surface, not a design choice.
+
+**Why do some tickers return 402 permanently?**
+Five tickers (ORCL, QCOM, BLK, MA, ASML) consistently return `402 Payment Required` on the free tier's `/stable/quote` endpoint, every single run, regardless of remaining daily quota. Retry logic with backoff was added and confirmed this is not transient — the same symbols fail deterministically every time. Likely explanation: FMP gates specific high-demand or foreign-listed symbols behind a paid plan even while quota-metered endpoints remain "free." These tickers were dropped from the tracked universe rather than worked around.
 
 **Why is the Lambda package dependency-free?**
 Switching to FMP's REST API means no more `yfinance`, `numpy`, or `pandas` — the whole Lambda is under 3.5 KB, built with only `urllib` and `boto3` (already available in the Lambda runtime). This eliminates the entire cross-compilation headache of building Linux-compatible binaries on an Apple Silicon Mac.
@@ -307,8 +315,9 @@ US markets are closed on weekends, so pre-market data wouldn't change. The Event
 ## Known Limitations
 
 - **No forward P/E**: FMP's free tier doesn't expose forward-looking analyst estimates, so the model falls back to trailing P/E for that scoring component
-- **PEG data gaps**: Some tickers (e.g. DIS, UNH, JNJ, META in early runs) don't return a PEG ratio from FMP's free tier — these are scored as neutral (0.5) on that component rather than penalized
-- **21-ticker universe**: Deliberately small to stay well within FMP's 250 calls/day free quota with room for manual testing
+- **PEG data gaps**: Some tickers (e.g. UNH, JNJ, META, TSLA) don't return a PEG ratio from FMP's free tier — these are scored as neutral (0.5) on that component rather than penalized
+- **Permanently restricted symbols**: ORCL, QCOM, BLK, MA, and ASML cannot be fetched on the free tier and are excluded from the tracked universe
+- **16-ticker universe**: Deliberately small to stay well within FMP's 250 calls/day free quota with room for manual testing
 
 ---
 

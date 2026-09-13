@@ -25,18 +25,18 @@ variable "tickers" {
   description = "List of stock tickers to track"
   type        = list(string)
   default     = [
-    # Technology (11)
+    # Technology (9)
     "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA",
-    "META", "TSLA", "ORCL",
-    "AMD", "QCOM", "INTC",
-    # Financials (5)
-    "JPM", "GS", "BLK", "V", "MA",
+    "META", "TSLA",
+    "AMD", "INTC",
+    # Financials (3)
+    "JPM", "GS", "V",
     # Healthcare (2)
     "JNJ", "UNH",
     # Energy (1)
-    "SMR",
-    # International ADRs (2)
-    "TSM", "ASML"
+    "CVX",
+    # International ADRs (1)
+    "TSM"
   ]
 }
 

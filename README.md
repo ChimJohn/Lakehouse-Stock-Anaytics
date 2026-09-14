@@ -1,4 +1,4 @@
-# 📈 Lakehouse Stock Analytics Platform
+# Lakehouse Stock Analytics Platform
 
 A personal investing dashboard backed by a fully IaC-provisioned data lakehouse. Stock data flows every weekday from Financial Modeling Prep → AWS Lambda → S3 → Databricks, with valuation scores pushed to Telegram 15 minutes after US pre-market opens. All infrastructure is managed by Terraform and deployed via GitHub Actions CI/CD.
 

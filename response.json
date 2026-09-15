@@ -1,1 +1,1 @@
-{"statusCode": 200, "date": "2026-09-13", "tickers_fetched": 15, "tickers_failed": 6, "s3_key": "stocks/date=2026-09-13/snapshot.json"}
+{"statusCode": 200, "date": "2026-09-15", "tickers_fetched": 30, "tickers_failed": 20, "s3_key": "stocks/date=2026-09-15/snapshot.json"}

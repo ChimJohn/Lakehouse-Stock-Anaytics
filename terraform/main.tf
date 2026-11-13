@@ -44,7 +44,8 @@ module "eventbridge" {
   source               = "./modules/eventbridge"
   lambda_function_arn  = module.lambda.function_arn
   lambda_function_name = module.lambda.function_name
-  schedule_expression  = "cron(15 8 ? * MON-FRI *)"
+  schedule_expression  = "cron(15 9 ? * MON-FRI *)"
+  // This cron expression triggers the Lambda function at 9:15 AM UTC (5:15 AM EST) every weekday (Monday to Friday).
 }
 
 module "databricks" {
